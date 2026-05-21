@@ -9,7 +9,11 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { RootNavigator } from './src/navigation/RootNavigator';
-import { runBotCycle } from './src/services/botController';
+import {
+  registerBotBackgroundTask,
+  runBotCycle,
+  unregisterBotBackgroundTask,
+} from './src/services/botController';
 import { initUserDb } from './src/services/userDb';
 import { useAppStore } from './src/store/useAppStore';
 
@@ -25,7 +29,12 @@ function BotSupervisor() {
   const autoTradeEnabled = useAppStore((s) => s.settings.autoTradeEnabled);
 
   useEffect(() => {
-    if (!autoTradeEnabled) return;
+    if (!autoTradeEnabled) {
+      unregisterBotBackgroundTask();
+      return;
+    }
+
+    registerBotBackgroundTask();
 
     let mounted = true;
     let timer: ReturnType<typeof setInterval> | null = null;
