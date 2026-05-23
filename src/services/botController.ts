@@ -6,6 +6,7 @@ import type { ActivePosition, TradeReport } from '../store/useAppStore';
 import { useAppStore } from '../store/useAppStore';
 import type { ScanResult, ScannedCandidate } from './tradingEngine';
 import { scanTop3 } from './tradingEngine';
+import { getUserPositions } from './userDb';
 
 const BOT_TASK_NAME = 'bist-bot-background';
 const RECENT_CLOSE_COOLDOWN_MS = 60 * 60 * 1000;
@@ -21,6 +22,23 @@ function pct(entry: number, exit: number): number {
 
 function toActivePositions(candidates: ScannedCandidate[], openedAtMs: number): ActivePosition[] {
   return candidates.map((c) => ({ ...c, openedAtMs }));
+}
+
+function parseStoredPositions(rows: Array<{ openedAtMs: number; payloadJson: string }>): ActivePosition[] {
+  return rows
+    .map((row) => {
+      try {
+        const parsed = JSON.parse(row.payloadJson) as unknown;
+        if (!parsed || typeof parsed !== 'object') return null;
+        const obj = parsed as Record<string, unknown>;
+        const symbol = obj['symbol'];
+        if (typeof symbol !== 'string' || symbol.length === 0) return null;
+        return { ...(obj as unknown as ActivePosition), openedAtMs: row.openedAtMs };
+      } catch {
+        return null;
+      }
+    })
+    .filter((p): p is ActivePosition => Boolean(p));
 }
 
 async function fetchLastPrice(symbol: string, baseUrl: string, timeoutMs: number): Promise<number> {
@@ -135,6 +153,7 @@ export async function runInitialScanAndSetPositions(): Promise<void> {
 export async function applyLivePricesAndRotate(prices: Record<string, number>): Promise<void> {
   const state = useAppStore.getState();
   if (!state.settings.autoTradeEnabled) return;
+  if (!state.isSignedIn) return;
 
   const nowMs = Date.now();
   const evaluated = evaluatePositions({
@@ -165,9 +184,22 @@ export async function applyLivePricesAndRotate(prices: Record<string, number>): 
 export async function runBotCycle(): Promise<void> {
   const state = useAppStore.getState();
   if (!state.settings.autoTradeEnabled) return;
+  if (!state.isSignedIn) return;
 
   const nowMs = Date.now();
   if (state.positions.length === 0) {
+    const userId = state.user?.id;
+    if (userId) {
+      try {
+        const rows = await getUserPositions(userId);
+        const restored = parseStoredPositions(rows);
+        if (restored.length > 0) {
+          state.setPositions(restored, nowMs);
+          return;
+        }
+      } catch {
+      }
+    }
     await runInitialScanAndSetPositions();
     return;
   }

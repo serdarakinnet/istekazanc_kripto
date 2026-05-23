@@ -3,11 +3,12 @@ import { ArrowDownRight, ArrowUpRight, RefreshCcw } from 'lucide-react-native';
 import * as React from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import Svg, { Polyline } from 'react-native-svg';
 
 import { useLiveTickerPrices } from '../hooks/useLiveTickerPrices';
 import { applyLivePricesAndRotate, runInitialScanAndSetPositions } from '../services/botController';
 import type { ScannedCandidate } from '../services/tradingEngine';
-import { scanTop3 } from '../services/tradingEngine';
+import { fetchKlines, scanTop3 } from '../services/tradingEngine';
 import { useAppStore } from '../store/useAppStore';
 
 function formatPrice(value: number): string {
@@ -27,6 +28,30 @@ function formatPercent(value: number): string {
 function scoreToUi(score: number): number {
   if (!Number.isFinite(score)) return 0;
   return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+function makeSparklinePoints(values: number[], width: number, height: number): string {
+  const cleaned = values.filter((v) => Number.isFinite(v));
+  if (cleaned.length < 2) return '';
+
+  const min = Math.min(...cleaned);
+  const max = Math.max(...cleaned);
+  const range = max - min;
+
+  const padX = 2;
+  const padY = 2;
+  const innerW = Math.max(1, width - padX * 2);
+  const innerH = Math.max(1, height - padY * 2);
+
+  const points = cleaned.map((v, i) => {
+    const t = cleaned.length === 1 ? 0 : i / (cleaned.length - 1);
+    const x = padX + t * innerW;
+    const yNorm = range === 0 ? 0.5 : (v - min) / range;
+    const y = padY + (1 - yNorm) * innerH;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+
+  return points.join(' ');
 }
 
 function CandidateCard({
@@ -49,6 +74,21 @@ function CandidateCard({
   const pnlPct =
     candidate.entry > 0 ? ((priceValue - candidate.entry) / candidate.entry) * 100 : Number.NaN;
   const pnlUp = pnlPct >= 0;
+
+  const sparkQuery = useQuery({
+    queryKey: ['sparkline', candidate.symbol],
+    queryFn: async () => fetchKlines(candidate.symbol, { klineInterval: '1h', klineLimit: 48 }),
+    staleTime: 60_000,
+    gcTime: 10 * 60_000,
+    refetchOnMount: false,
+    refetchOnReconnect: true,
+  });
+  const sparkValues = React.useMemo(() => {
+    const closes = (sparkQuery.data ?? []).map((k) => k.close).filter((v) => Number.isFinite(v));
+    return closes.slice(-24);
+  }, [sparkQuery.data]);
+  const sparkColor = pctUp ? '#00ff88' : '#ff3b5c';
+  const sparkPoints = makeSparklinePoints(sparkValues, 140, 36);
 
   return (
     <View className="rounded-2xl border border-[#1c2430] bg-bg-900 p-4">
@@ -118,6 +158,28 @@ function CandidateCard({
           >
             {formatPercent(pnlPct)}
           </Text>
+        </View>
+      </View>
+
+      <View className="mt-4 flex-row items-center justify-between rounded-xl border border-[#1c2430] bg-bg-950 px-3 py-2">
+        <Text className="text-[11px] text-gray-500">Grafik (1h)</Text>
+        <View className="h-[36px] w-[140px] items-center justify-center">
+          {sparkPoints ? (
+            <Svg width={140} height={36}>
+              <Polyline
+                points={sparkPoints}
+                fill="none"
+                stroke={sparkColor}
+                strokeWidth={2}
+                strokeLinejoin="round"
+                strokeLinecap="round"
+              />
+            </Svg>
+          ) : (
+            <Text className="text-[11px] text-gray-600">
+              {sparkQuery.isLoading ? 'Yükleniyor…' : '—'}
+            </Text>
+          )}
         </View>
       </View>
     </View>

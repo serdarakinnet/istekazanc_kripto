@@ -39,3 +39,6 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Trae / IDE artifacts
+Traeresourcesappoutvsworkbenchcontribterminalcommonscriptssafe_rm_aliases.ps1*
