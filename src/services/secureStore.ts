@@ -4,10 +4,17 @@ import { Platform } from 'react-native';
 
 const API_KEY_KEY = 'binance_tr_api_key';
 const API_SECRET_KEY = 'binance_tr_api_secret';
+const LOGIN_EMAIL_KEY = 'bist_login_email';
+const LOGIN_PASSWORD_KEY = 'bist_login_password';
 
 export type ApiCredentials = {
   apiKey: string;
   apiSecret: string;
+};
+
+export type RememberedLogin = {
+  email: string;
+  password: string;
 };
 
 async function getItem(key: string): Promise<string | null> {
@@ -71,4 +78,30 @@ export async function setApiCredentials(
 
 export async function clearApiCredentials(): Promise<void> {
   await Promise.all([deleteItem(API_KEY_KEY), deleteItem(API_SECRET_KEY)]);
+}
+
+export async function getRememberedLogin(): Promise<RememberedLogin | null> {
+  const [email, password] = await Promise.all([
+    getItem(LOGIN_EMAIL_KEY),
+    getItem(LOGIN_PASSWORD_KEY),
+  ]);
+
+  const normalizedEmail = (email ?? '').trim();
+  const normalizedPassword = password ?? '';
+  if (!normalizedEmail || !normalizedPassword) return null;
+
+  return { email: normalizedEmail, password: normalizedPassword };
+}
+
+export async function setRememberedLogin(params: RememberedLogin): Promise<void> {
+  const email = params.email.trim();
+  const password = params.password;
+  await Promise.all([
+    setItem(LOGIN_EMAIL_KEY, email),
+    setItem(LOGIN_PASSWORD_KEY, password),
+  ]);
+}
+
+export async function clearRememberedLogin(): Promise<void> {
+  await Promise.all([deleteItem(LOGIN_EMAIL_KEY), deleteItem(LOGIN_PASSWORD_KEY)]);
 }

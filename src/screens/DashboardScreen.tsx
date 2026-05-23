@@ -46,6 +46,9 @@ function CandidateCard({
 
   const pct = candidate.lastChangePercent;
   const pctUp = pct >= 0;
+  const pnlPct =
+    candidate.entry > 0 ? ((priceValue - candidate.entry) / candidate.entry) * 100 : Number.NaN;
+  const pnlUp = pnlPct >= 0;
 
   return (
     <View className="rounded-2xl border border-[#1c2430] bg-bg-900 p-4">
@@ -106,9 +109,14 @@ function CandidateCard({
           </Text>
         </View>
         <View>
-          <Text className="text-[11px] text-gray-500">R:R</Text>
-          <Text className="mt-1 text-sm font-semibold text-gray-200">
-            {candidate.riskReward.toFixed(2)}
+          <Text className="text-[11px] text-gray-500">K/Z</Text>
+          <Text
+            className={[
+              'mt-1 text-sm font-semibold',
+              pnlUp ? 'text-[#00ff88]' : 'text-[#ff3b5c]',
+            ].join(' ')}
+          >
+            {formatPercent(pnlPct)}
           </Text>
         </View>
       </View>

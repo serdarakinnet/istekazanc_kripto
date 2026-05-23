@@ -8,6 +8,7 @@ import type { ScanResult, ScannedCandidate } from './tradingEngine';
 import { scanTop3 } from './tradingEngine';
 
 const BOT_TASK_NAME = 'bist-bot-background';
+const RECENT_CLOSE_COOLDOWN_MS = 60 * 60 * 1000;
 
 function makeReportId(symbol: string, closedAtMs: number): string {
   return `${symbol}-${closedAtMs}`;
@@ -105,7 +106,11 @@ async function refillPositions(params: {
 }): Promise<{ positions: ActivePosition[]; scan: ScanResult | null }> {
   if (params.current.length >= 3) return { positions: params.current, scan: null };
 
-  const excludeSymbols = params.current.map((p) => p.symbol);
+  const state = useAppStore.getState();
+  const recentClosed = Object.entries(state.recentlyClosedSymbols)
+    .filter(([, ms]) => Number.isFinite(ms) && params.nowMs - ms < RECENT_CLOSE_COOLDOWN_MS)
+    .map(([sym]) => sym);
+  const excludeSymbols = [...params.current.map((p) => p.symbol), ...recentClosed];
   const scan = await scanTop3({
     minRiskReward: params.minRiskReward,
     excludeSymbols,
@@ -140,6 +145,10 @@ export async function applyLivePricesAndRotate(prices: Record<string, number>): 
 
   if (evaluated.closed.length === 0) return;
 
+  state.addRecentlyClosedSymbols(
+    evaluated.closed.map((r) => r.symbol),
+    nowMs,
+  );
   state.appendReports(evaluated.closed);
 
   const { positions } = await refillPositions({
@@ -172,6 +181,10 @@ export async function runBotCycle(): Promise<void> {
   });
 
   if (evaluated.closed.length > 0) {
+    state.addRecentlyClosedSymbols(
+      evaluated.closed.map((r) => r.symbol),
+      nowMs,
+    );
     state.appendReports(evaluated.closed);
   }
 
@@ -211,7 +224,7 @@ export async function registerBotBackgroundTask(): Promise<void> {
   if (isRegistered) return;
 
   await BackgroundFetch.registerTaskAsync(BOT_TASK_NAME, {
-    minimumInterval: 15 * 60,
+    minimumInterval: 60,
     stopOnTerminate: false,
     startOnBoot: true,
   });

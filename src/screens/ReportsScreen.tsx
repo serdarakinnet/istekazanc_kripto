@@ -1,6 +1,5 @@
 import * as React from 'react';
-import { Trash2 } from 'lucide-react-native';
-import { Pressable, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import type { TradeReport } from '../store/useAppStore';
@@ -67,7 +66,6 @@ function Tab({
 
 export function ReportsScreen() {
   const reports = useAppStore((s) => s.reports);
-  const clearReports = useAppStore((s) => s.clearReports);
   const [range, setRange] = React.useState<RangeKey>('day');
 
   const now = Date.now();
@@ -88,13 +86,6 @@ export function ReportsScreen() {
               TP/SL kapanışları, Win Rate ve PnL özeti.
             </Text>
           </View>
-          <Pressable
-            onPress={clearReports}
-            className="rounded-xl border border-[#1c2430] bg-bg-900 p-3"
-            accessibilityLabel="Raporları Temizle"
-          >
-            <Trash2 size={18} color="#9ca3af" />
-          </Pressable>
         </View>
 
         <View className="mt-5 flex-row gap-2 rounded-2xl border border-[#1c2430] bg-bg-950 p-2">

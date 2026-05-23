@@ -1,5 +1,5 @@
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { Lock, Mail, UserPlus } from 'lucide-react-native';
+import { Check, Lock, Mail, UserPlus } from 'lucide-react-native';
 import * as React from 'react';
 import { useMemo, useState } from 'react';
 import {
@@ -13,6 +13,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import type { AuthStackParamList } from '../navigation/RootNavigator';
+import { clearRememberedLogin, getRememberedLogin, setRememberedLogin } from '../services/secureStore';
 import { useAppStore } from '../store/useAppStore';
 
 type Props = NativeStackScreenProps<AuthStackParamList, 'Login'>;
@@ -27,8 +28,24 @@ export function LoginScreen({ navigation }: Props) {
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [rememberMe, setRememberMe] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  React.useEffect(() => {
+    let mounted = true;
+    void (async () => {
+      const remembered = await getRememberedLogin();
+      if (!mounted) return;
+      if (!remembered) return;
+      setEmail(remembered.email);
+      setPassword(remembered.password);
+      setRememberMe(true);
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const canSubmit = useMemo(() => {
     return isValidEmail(email) && password.trim().length > 0 && !loading;
@@ -39,6 +56,12 @@ export function LoginScreen({ navigation }: Props) {
       setLoading(true);
       setError(null);
       await signInWithEmail({ email, password });
+
+      if (rememberMe) {
+        await setRememberedLogin({ email, password });
+      } else {
+        await clearRememberedLogin();
+      }
 
       if (!hasApiCredentials) {
         navigation.replace('ApiKeys');
@@ -102,6 +125,23 @@ export function LoginScreen({ navigation }: Props) {
                 />
               </View>
             </View>
+
+            <Pressable
+              onPress={() => setRememberMe((v) => !v)}
+              className="flex-row items-center gap-3"
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: rememberMe }}
+            >
+              <View
+                className={[
+                  'h-5 w-5 items-center justify-center rounded border',
+                  rememberMe ? 'border-[#4ce6ff] bg-[#0b1b21]' : 'border-[#1c2430] bg-bg-900',
+                ].join(' ')}
+              >
+                {rememberMe ? <Check size={14} color="#4ce6ff" /> : null}
+              </View>
+              <Text className="text-sm text-gray-300">Beni hatırla</Text>
+            </Pressable>
 
             {error ? (
               <View className="rounded-2xl border border-[#2a1b22] bg-[#12090d] px-4 py-3">
