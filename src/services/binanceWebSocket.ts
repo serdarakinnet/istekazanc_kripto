@@ -2,11 +2,11 @@ import { usePriceHistoryStore } from '../store/priceHistoryStore';
 
 type OnPrice = (symbol: string, price: number) => void;
 
-function buildCombinedKlineStreamUrl(symbols: string[]): string | null {
+function buildCombinedTickerStreamUrl(symbols: string[]): string | null {
   const streams = symbols
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean)
-    .map((s) => `${s}@kline_1h`);
+    .map((s) => `${s}@ticker`);
 
   if (streams.length === 0) return null;
 
@@ -71,7 +71,7 @@ export class BinanceWebSocketService {
   private connect() {
     this.clearReconnect();
 
-    const url = buildCombinedKlineStreamUrl(this.symbols);
+    const url = buildCombinedTickerStreamUrl(this.symbols);
     if (!url) {
       this.disconnect();
       return;
@@ -102,12 +102,12 @@ export class BinanceWebSocketService {
       }
 
       const envelope = message as {
-        data?: { k?: { s?: unknown; c?: unknown } } | unknown;
+        data?: { s?: unknown; c?: unknown } | unknown;
       };
-      const kline = (envelope?.data as { k?: { s?: unknown; c?: unknown } } | undefined)?.k;
+      const data = envelope?.data as { s?: unknown; c?: unknown } | undefined;
 
-      const symbol = typeof kline?.s === 'string' ? kline.s.toUpperCase() : null;
-      const price = safeParseFloat(kline?.c);
+      const symbol = typeof data?.s === 'string' ? data.s.toUpperCase() : null;
+      const price = safeParseFloat(data?.c);
       if (!symbol || price === null) return;
       if (!this.symbols.includes(symbol)) return;
 
