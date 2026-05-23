@@ -52,8 +52,6 @@ export function RegisterScreen({ navigation }: Props) {
 
       if (!hasApiCredentials) {
         navigation.replace('ApiKeys');
-      } else {
-        navigation.replace('Login');
       }
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Kayıt başarısız.';

@@ -64,11 +64,38 @@ function isValidEmail(email: string): boolean {
 }
 
 async function sha256(input: string): Promise<string> {
-  return Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, input);
+  try {
+    return await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, input);
+  } catch {
+    const subtle = globalThis.crypto?.subtle;
+    if (!subtle || typeof TextEncoder === 'undefined') {
+      throw new Error('Şifre doğrulama desteklenmiyor (tarayıcı kripto eksik).');
+    }
+    const bytes = new TextEncoder().encode(input);
+    const digest = await subtle.digest('SHA-256', bytes);
+    const out = Array.from(new Uint8Array(digest))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+    return out;
+  }
+}
+
+function getRandomBytes(length: number): Uint8Array {
+  try {
+    return Crypto.getRandomBytes(length);
+  } catch {
+    const webCrypto = globalThis.crypto;
+    if (webCrypto?.getRandomValues) {
+      const bytes = new Uint8Array(length);
+      webCrypto.getRandomValues(bytes);
+      return bytes;
+    }
+    throw new Error('Güvenli rastgele üretilemiyor.');
+  }
 }
 
 async function generateSalt(): Promise<string> {
-  const bytes = Crypto.getRandomBytes(16);
+  const bytes = getRandomBytes(16);
   return Array.from(bytes)
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
@@ -163,7 +190,35 @@ export async function verifyLogin(params: VerifyLoginParams): Promise<UserRecord
   if (!user) throw new Error('E-mail veya şifre hatalı.');
 
   const expected = await hashPassword(password, user.passwordSalt);
-  if (expected !== user.passwordHash) throw new Error('E-mail veya şifre hatalı.');
+  if (expected !== user.passwordHash) {
+    const salt = user.passwordSalt ?? '';
+    const legacyCandidates = [
+      `${password}`,
+      `${password}:${salt}`,
+      `${password}|${salt}`,
+      `${salt}|${password}`,
+      `${salt}${password}`,
+      `${password}${salt}`,
+    ];
+
+    let legacyMatch = false;
+    for (const candidate of legacyCandidates) {
+      const legacyHash = await sha256(candidate);
+      if (legacyHash === user.passwordHash) {
+        legacyMatch = true;
+        break;
+      }
+    }
+
+    if (!legacyMatch) throw new Error('E-mail veya şifre hatalı.');
+
+    const users = await loadUsersFromAsyncStorage();
+    const idx = users.findIndex((u) => u.id === user.id);
+    if (idx >= 0) {
+      users[idx] = { ...users[idx], passwordHash: expected };
+      await saveUsersToAsyncStorage(users);
+    }
+  }
 
   return user;
 }

@@ -201,7 +201,32 @@ export async function verifyLogin(params: VerifyLoginParams): Promise<UserRecord
   if (!user) throw new Error('E-mail veya şifre hatalı.');
 
   const expected = await hashPassword(password, user.passwordSalt);
-  if (expected !== user.passwordHash) throw new Error('E-mail veya şifre hatalı.');
+  if (expected !== user.passwordHash) {
+    const salt = user.passwordSalt ?? '';
+    const legacyCandidates = [
+      `${password}`,
+      `${password}:${salt}`,
+      `${password}|${salt}`,
+      `${salt}|${password}`,
+      `${salt}${password}`,
+      `${password}${salt}`,
+    ];
+
+    let legacyMatch = false;
+    for (const candidate of legacyCandidates) {
+      const legacyHash = await sha256(candidate);
+      if (legacyHash === user.passwordHash) {
+        legacyMatch = true;
+        break;
+      }
+    }
+
+    if (!legacyMatch) throw new Error('E-mail veya şifre hatalı.');
+
+    await initUserDb();
+    const db = await getDb();
+    await db.runAsync('UPDATE users SET passwordHash = ? WHERE id = ?', [expected, user.id]);
+  }
 
   return user;
 }

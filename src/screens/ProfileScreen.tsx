@@ -27,6 +27,12 @@ export function ProfileScreen() {
   const settings = useAppStore((s) => s.settings);
   const updateSettings = useAppStore((s) => s.updateSettings);
 
+  const minRiskReward = React.useMemo(() => {
+    const raw = settings.minRiskReward;
+    const n = typeof raw === 'number' ? raw : Number(raw);
+    return Number.isFinite(n) && n > 0 ? n : 1.5;
+  }, [settings.minRiskReward]);
+
   const [apiKey, setApiKey] = React.useState('');
   const [apiSecret, setApiSecret] = React.useState('');
   const [showSecret, setShowSecret] = React.useState(false);
@@ -57,15 +63,23 @@ export function ProfileScreen() {
               )}
               <Switch
                 value={settings.autoTradeEnabled}
-                onValueChange={async (enabled) => {
+                onValueChange={(enabled) => {
                   setError(null);
                   updateSettings({ autoTradeEnabled: enabled });
-                  if (enabled) {
-                    await runInitialScanAndSetPositions();
-                    await registerBotBackgroundTask();
-                  } else {
-                    await unregisterBotBackgroundTask();
-                  }
+                  void (async () => {
+                    try {
+                      if (enabled) {
+                        await runInitialScanAndSetPositions();
+                        await registerBotBackgroundTask();
+                      } else {
+                        await unregisterBotBackgroundTask();
+                      }
+                    } catch (e) {
+                      const message =
+                        e instanceof Error ? e.message : 'İşlem başarısız.';
+                      setError(message);
+                    }
+                  })();
                 }}
               />
             </View>
@@ -76,7 +90,7 @@ export function ProfileScreen() {
             <View className="mt-2 flex-row items-center justify-between">
               <Pressable
                 onPress={() => {
-                  const next = clamp(Number((settings.minRiskReward - 0.1).toFixed(2)), 1.5, 5);
+                  const next = clamp(Number((minRiskReward - 0.1).toFixed(2)), 1.5, 5);
                   updateSettings({ minRiskReward: next });
                 }}
                 className="rounded-xl border border-[#1c2430] bg-bg-900 p-3"
@@ -85,12 +99,12 @@ export function ProfileScreen() {
               </Pressable>
 
               <Text className="text-base font-semibold text-gray-100">
-                {settings.minRiskReward.toFixed(2)}
+                {Number.isFinite(minRiskReward) ? minRiskReward.toFixed(2) : '—'}
               </Text>
 
               <Pressable
                 onPress={() => {
-                  const next = clamp(Number((settings.minRiskReward + 0.1).toFixed(2)), 1.5, 5);
+                  const next = clamp(Number((minRiskReward + 0.1).toFixed(2)), 1.5, 5);
                   updateSettings({ minRiskReward: next });
                 }}
                 className="rounded-xl border border-[#1c2430] bg-bg-900 p-3"

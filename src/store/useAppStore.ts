@@ -99,8 +99,12 @@ export const useAppStore = create<AppState>()(
       },
 
       hydrateSecure: async () => {
-        const credentials = await getApiCredentials();
-        set({ apiCredentials: credentials, hasSecureHydrated: true });
+        try {
+          const credentials = await getApiCredentials();
+          set({ apiCredentials: credentials, hasSecureHydrated: true });
+        } catch {
+          set({ apiCredentials: null, hasSecureHydrated: true });
+        }
       },
 
       signInWithEmail: async ({ email, password }) => {
@@ -113,8 +117,11 @@ export const useAppStore = create<AppState>()(
 
         const settings: AppSettings = settingsRow
           ? {
-              autoTradeEnabled: settingsRow.autoTradeEnabled,
-              minRiskReward: settingsRow.minRiskReward,
+              autoTradeEnabled: Boolean(settingsRow.autoTradeEnabled),
+              minRiskReward:
+                Number.isFinite(Number(settingsRow.minRiskReward)) && Number(settingsRow.minRiskReward) > 0
+                  ? Number(settingsRow.minRiskReward)
+                  : DEFAULT_SETTINGS.minRiskReward,
             }
           : DEFAULT_SETTINGS;
 

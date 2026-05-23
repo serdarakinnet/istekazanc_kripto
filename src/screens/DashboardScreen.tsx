@@ -1,198 +1,30 @@
 import { useQuery } from '@tanstack/react-query';
-import { ArrowDownRight, ArrowUpRight, RefreshCcw } from 'lucide-react-native';
+import { RefreshCcw } from 'lucide-react-native';
 import * as React from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { FlatList, Pressable, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import Svg, { Polyline } from 'react-native-svg';
 
-import { useLiveTickerPrices } from '../hooks/useLiveTickerPrices';
+import { CryptoCard } from '../components/CryptoCard/CryptoCard';
+import { binanceWS } from '../services/binanceWebSocket';
 import { applyLivePricesAndRotate, runInitialScanAndSetPositions } from '../services/botController';
-import type { ScannedCandidate } from '../services/tradingEngine';
-import { fetchKlines, scanTop3 } from '../services/tradingEngine';
+import { scanTop3 } from '../services/tradingEngine';
+import { usePriceHistoryStore } from '../store/priceHistoryStore';
 import { useAppStore } from '../store/useAppStore';
 
-function formatPrice(value: number): string {
-  if (!Number.isFinite(value)) return '—';
-  const abs = Math.abs(value);
-  if (abs >= 1000) return value.toFixed(2);
-  if (abs >= 1) return value.toFixed(4);
-  return value.toFixed(8);
-}
-
-function formatPercent(value: number): string {
-  if (!Number.isFinite(value)) return '—';
-  const sign = value > 0 ? '+' : '';
-  return `${sign}${value.toFixed(2)}%`;
-}
-
-function scoreToUi(score: number): number {
-  if (!Number.isFinite(score)) return 0;
-  return Math.max(0, Math.min(100, Math.round(score)));
-}
-
-function makeSparklinePoints(values: number[], width: number, height: number): string {
-  const cleaned = values.filter((v) => Number.isFinite(v));
-  if (cleaned.length < 2) return '';
-
-  const min = Math.min(...cleaned);
-  const max = Math.max(...cleaned);
-  const range = max - min;
-
-  const padX = 2;
-  const padY = 2;
-  const innerW = Math.max(1, width - padX * 2);
-  const innerH = Math.max(1, height - padY * 2);
-
-  const points = cleaned.map((v, i) => {
-    const t = cleaned.length === 1 ? 0 : i / (cleaned.length - 1);
-    const x = padX + t * innerW;
-    const yNorm = range === 0 ? 0.5 : (v - min) / range;
-    const y = padY + (1 - yNorm) * innerH;
-    return `${x.toFixed(1)},${y.toFixed(1)}`;
-  });
-
-  return points.join(' ');
-}
-
-function CandidateCard({
-  candidate,
-  livePrice,
-}: {
-  candidate: ScannedCandidate;
-  livePrice: { price: number; direction: 'up' | 'down' | null } | null;
-}) {
-  const priceValue = livePrice?.price ?? candidate.lastPrice;
-  const priceFlash =
-    livePrice?.direction === 'up'
-      ? 'bg-[#07130d] border-[#13241b]'
-      : livePrice?.direction === 'down'
-        ? 'bg-[#12090d] border-[#2a1b22]'
-        : 'bg-transparent border-[#1c2430]';
-
-  const pct = candidate.lastChangePercent;
-  const pctUp = pct >= 0;
-  const pnlPct =
-    candidate.entry > 0 ? ((priceValue - candidate.entry) / candidate.entry) * 100 : Number.NaN;
-  const pnlUp = pnlPct >= 0;
-
-  const sparkQuery = useQuery({
-    queryKey: ['sparkline', candidate.symbol],
-    queryFn: async () => fetchKlines(candidate.symbol, { klineInterval: '1h', klineLimit: 48 }),
-    staleTime: 60_000,
-    gcTime: 10 * 60_000,
-    refetchOnMount: false,
-    refetchOnReconnect: true,
-  });
-  const sparkValues = React.useMemo(() => {
-    const closes = (sparkQuery.data ?? []).map((k) => k.close).filter((v) => Number.isFinite(v));
-    return closes.slice(-24);
-  }, [sparkQuery.data]);
-  const sparkColor = pctUp ? '#00ff88' : '#ff3b5c';
-  const sparkPoints = makeSparklinePoints(sparkValues, 140, 36);
-
-  return (
-    <View className="rounded-2xl border border-[#1c2430] bg-bg-900 p-4">
-      <View className="flex-row items-start justify-between">
-        <View>
-          <Text className="text-lg font-semibold text-gray-100">
-            {candidate.symbol}
-          </Text>
-          <Text className="mt-1 text-xs text-gray-400">
-            AI Skoru: {scoreToUi(candidate.score)}/100
-          </Text>
-        </View>
-
-        <View
-          className={[
-            'rounded-xl border px-3 py-2',
-            priceFlash,
-          ].join(' ')}
-        >
-          <Text className="text-base font-semibold text-gray-100">
-            {formatPrice(priceValue)}
-          </Text>
-          <View className="mt-1 flex-row items-center justify-end gap-1">
-            {pctUp ? (
-              <ArrowUpRight size={14} color="#00ff88" />
-            ) : (
-              <ArrowDownRight size={14} color="#ff3b5c" />
-            )}
-            <Text
-              className={[
-                'text-xs font-semibold',
-                pctUp ? 'text-[#00ff88]' : 'text-[#ff3b5c]',
-              ].join(' ')}
-            >
-              {formatPercent(pct)}
-            </Text>
-          </View>
-        </View>
-      </View>
-
-      <View className="mt-4 flex-row justify-between">
-        <View>
-          <Text className="text-[11px] text-gray-500">Entry</Text>
-          <Text className="mt-1 text-sm font-semibold text-gray-200">
-            {formatPrice(candidate.entry)}
-          </Text>
-        </View>
-        <View>
-          <Text className="text-[11px] text-gray-500">Target</Text>
-          <Text className="mt-1 text-sm font-semibold text-[#00ff88]">
-            {formatPrice(candidate.target)}
-          </Text>
-        </View>
-        <View>
-          <Text className="text-[11px] text-gray-500">Stop</Text>
-          <Text className="mt-1 text-sm font-semibold text-[#ff3b5c]">
-            {formatPrice(candidate.stop)}
-          </Text>
-        </View>
-        <View>
-          <Text className="text-[11px] text-gray-500">K/Z</Text>
-          <Text
-            className={[
-              'mt-1 text-sm font-semibold',
-              pnlUp ? 'text-[#00ff88]' : 'text-[#ff3b5c]',
-            ].join(' ')}
-          >
-            {formatPercent(pnlPct)}
-          </Text>
-        </View>
-      </View>
-
-      <View className="mt-4 flex-row items-center justify-between rounded-xl border border-[#1c2430] bg-bg-950 px-3 py-2">
-        <Text className="text-[11px] text-gray-500">Grafik (1h)</Text>
-        <View className="h-[36px] w-[140px] items-center justify-center">
-          {sparkPoints ? (
-            <Svg width={140} height={36}>
-              <Polyline
-                points={sparkPoints}
-                fill="none"
-                stroke={sparkColor}
-                strokeWidth={2}
-                strokeLinejoin="round"
-                strokeLinecap="round"
-              />
-            </Svg>
-          ) : (
-            <Text className="text-[11px] text-gray-600">
-              {sparkQuery.isLoading ? 'Yükleniyor…' : '—'}
-            </Text>
-          )}
-        </View>
-      </View>
-    </View>
-  );
-}
-
 export function DashboardScreen() {
-  const minRiskReward = useAppStore((s) => s.settings.minRiskReward);
+  const rawMinRiskReward = useAppStore((s) => s.settings.minRiskReward);
   const autoTradeEnabled = useAppStore((s) => s.settings.autoTradeEnabled);
   const watchlist = useAppStore((s) => s.watchlist);
   const positions = useAppStore((s) => s.positions);
   const lastScanMs = useAppStore((s) => s.lastScanMs);
   const setWatchlist = useAppStore((s) => s.setWatchlist);
+
+  const lastRotateMsRef = React.useRef(0);
+
+  const minRiskReward = React.useMemo(() => {
+    const n = typeof rawMinRiskReward === 'number' ? rawMinRiskReward : Number(rawMinRiskReward);
+    return Number.isFinite(n) && n > 0 ? n : 1.5;
+  }, [rawMinRiskReward]);
 
   const scanQuery = useQuery({
     queryKey: ['scanTop3', minRiskReward],
@@ -204,10 +36,12 @@ export function DashboardScreen() {
   });
 
   React.useEffect(() => {
-    if (scanQuery.data?.topCandidates) {
-      setWatchlist(scanQuery.data.topCandidates, scanQuery.data.asOfMs);
-    }
-  }, [scanQuery.data?.asOfMs, scanQuery.data?.topCandidates, setWatchlist]);
+    const next = scanQuery.data?.topCandidates;
+    const asOfMs = scanQuery.data?.asOfMs;
+    if (!next || !asOfMs) return;
+    if (lastScanMs === asOfMs) return;
+    setWatchlist(next, asOfMs);
+  }, [lastScanMs, scanQuery.data?.asOfMs, scanQuery.data?.topCandidates, setWatchlist]);
 
   const candidates =
     autoTradeEnabled && positions.length > 0
@@ -215,116 +49,128 @@ export function DashboardScreen() {
       : watchlist.length > 0
         ? watchlist
         : scanQuery.data?.topCandidates ?? [];
-  const symbols = candidates.map((c) => c.symbol);
-  const livePrices = useLiveTickerPrices(symbols, { throttleMs: 1000, flashMs: 250 });
+  const symbols = React.useMemo(() => candidates.map((c) => c.symbol), [candidates]);
 
   React.useEffect(() => {
-    if (!autoTradeEnabled) return;
-    if (symbols.length === 0) return;
-
-    const prices: Record<string, number> = {};
-    for (const symbol of symbols) {
-      const p = livePrices[symbol];
-      if (p) prices[symbol] = p.price;
+    const key = symbols.join('|');
+    if (!key) {
+      binanceWS.disconnect();
+      return;
     }
 
-    if (Object.keys(prices).length === 0) return;
-    applyLivePricesAndRotate(prices);
-  }, [autoTradeEnabled, livePrices, symbols.join('|')]);
+    binanceWS.subscribe(symbols, () => {
+      if (!autoTradeEnabled) return;
+      const now = Date.now();
+      if (now - lastRotateMsRef.current < 1000) return;
+      lastRotateMsRef.current = now;
+
+      const snapshot = usePriceHistoryStore.getState().currentPrices;
+      const prices: Record<string, number> = {};
+      for (const sym of symbols) {
+        const p = snapshot[sym.toUpperCase()];
+        if (Number.isFinite(p)) prices[sym.toUpperCase()] = p;
+      }
+      if (Object.keys(prices).length === 0) return;
+      void applyLivePricesAndRotate(prices).catch(() => {});
+    });
+
+    return () => {
+      binanceWS.disconnect();
+    };
+  }, [autoTradeEnabled, symbols.join('|')]);
 
   return (
     <SafeAreaView className="flex-1 bg-bg-950">
-      <View className="px-6 pt-6">
-        <View className="flex-row items-start justify-between">
-          <View className="flex-1 pr-4">
-            <Text className="text-2xl font-semibold text-gray-100">
-              Aktif Seçimler
-            </Text>
-            <View className="mt-2 flex-row items-center gap-2">
-              <Text className="text-sm text-gray-400">
-                En İyi 3 kripto: tarama + canlı fiyat.
-              </Text>
-              <View
-                className={[
-                  'rounded-full border px-2 py-1',
-                  autoTradeEnabled
-                    ? 'border-[#13241b] bg-[#07130d]'
-                    : 'border-[#1c2430] bg-bg-900',
-                ].join(' ')}
+      <FlatList
+        data={candidates}
+        keyExtractor={(item) => item.symbol}
+        contentContainerStyle={{ paddingTop: 24, paddingBottom: 24 }}
+        ListHeaderComponent={
+          <View className="px-6">
+            <View className="flex-row items-start justify-between">
+              <View className="flex-1 pr-4">
+                <Text className="text-2xl font-semibold text-gray-100">
+                  Aktif Seçimler
+                </Text>
+                <View className="mt-2 flex-row items-center gap-2">
+                  <Text className="text-sm text-gray-400">
+                    En İyi 3 kripto: tarama + canlı fiyat + sparkline.
+                  </Text>
+                  <View
+                    className={[
+                      'rounded-full border px-2 py-1',
+                      autoTradeEnabled
+                        ? 'border-[#13241b] bg-[#07130d]'
+                        : 'border-[#1c2430] bg-bg-900',
+                    ].join(' ')}
+                  >
+                    <Text
+                      className={[
+                        'text-[10px] font-semibold',
+                        autoTradeEnabled ? 'text-[#00ff88]' : 'text-gray-400',
+                      ].join(' ')}
+                    >
+                      {autoTradeEnabled ? 'AUTO-TRADE AÇIK' : 'AUTO-TRADE KAPALI'}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
+              <Pressable
+                onPress={() => {
+                  if (autoTradeEnabled) {
+                    void runInitialScanAndSetPositions().catch(() => {});
+                  } else {
+                    scanQuery.refetch();
+                  }
+                }}
+                disabled={scanQuery.isFetching}
+                className="rounded-xl border border-[#1c2430] bg-bg-900 p-3"
+                accessibilityLabel="Yenile"
               >
-                <Text
-                  className={[
-                    'text-[10px] font-semibold',
-                    autoTradeEnabled ? 'text-[#00ff88]' : 'text-gray-400',
-                  ].join(' ')}
-                >
-                  {autoTradeEnabled ? 'AUTO-TRADE AÇIK' : 'AUTO-TRADE KAPALI'}
+                <RefreshCcw
+                  size={18}
+                  color={scanQuery.isFetching ? '#6b7280' : '#9ca3af'}
+                />
+              </Pressable>
+            </View>
+
+            <View className="mt-3 flex-row items-center justify-between">
+              <Text className="text-xs text-gray-500">
+                Min R:R: {Number.isFinite(minRiskReward) ? minRiskReward.toFixed(2) : '—'}
+              </Text>
+              <Text className="text-xs text-gray-500">
+                {lastScanMs ? `Son tarama: ${new Date(lastScanMs).toLocaleTimeString()}` : '—'}
+              </Text>
+            </View>
+
+            {scanQuery.isError ? (
+              <View className="mt-4 rounded-2xl border border-[#2a1b22] bg-[#12090d] px-4 py-3">
+                <Text className="text-sm text-[#ff3b5c]">
+                  Tarama hatası. Tekrar dene.
                 </Text>
               </View>
-            </View>
+            ) : null}
+
+            {scanQuery.isLoading && candidates.length === 0 ? (
+              <View className="mt-6 gap-4">
+                <View className="h-[180px] rounded-2xl border border-[#1c2430] bg-bg-900" />
+                <View className="h-[180px] rounded-2xl border border-[#1c2430] bg-bg-900" />
+                <View className="h-[180px] rounded-2xl border border-[#1c2430] bg-bg-900" />
+              </View>
+            ) : null}
           </View>
-
-          <Pressable
-            onPress={() => {
-              if (autoTradeEnabled) {
-                runInitialScanAndSetPositions();
-              } else {
-                scanQuery.refetch();
-              }
-            }}
-            disabled={scanQuery.isFetching}
-            className="rounded-xl border border-[#1c2430] bg-bg-900 p-3"
-            accessibilityLabel="Yenile"
-          >
-            <RefreshCcw
-              size={18}
-              color={scanQuery.isFetching ? '#6b7280' : '#9ca3af'}
-            />
-          </Pressable>
-        </View>
-
-        <View className="mt-3 flex-row items-center justify-between">
-          <Text className="text-xs text-gray-500">
-            Min R:R: {minRiskReward.toFixed(2)}
-          </Text>
-          <Text className="text-xs text-gray-500">
-            {lastScanMs ? `Son tarama: ${new Date(lastScanMs).toLocaleTimeString()}` : '—'}
-          </Text>
-        </View>
-
-        {scanQuery.isError ? (
-          <View className="mt-4 rounded-2xl border border-[#2a1b22] bg-[#12090d] px-4 py-3">
-            <Text className="text-sm text-[#ff3b5c]">
-              Tarama hatası. Tekrar dene.
-            </Text>
-          </View>
-        ) : null}
-
-        <View className="mt-6 gap-4">
-          {scanQuery.isLoading && candidates.length === 0 ? (
-            <>
-              <View className="h-[124px] rounded-2xl border border-[#1c2430] bg-bg-900" />
-              <View className="h-[124px] rounded-2xl border border-[#1c2430] bg-bg-900" />
-              <View className="h-[124px] rounded-2xl border border-[#1c2430] bg-bg-900" />
-            </>
-          ) : (
-            candidates.map((candidate) => (
-              <CandidateCard
-                key={candidate.symbol}
-                candidate={candidate}
-                livePrice={
-                  livePrices[candidate.symbol]
-                    ? {
-                        price: livePrices[candidate.symbol]!.price,
-                        direction: livePrices[candidate.symbol]!.direction,
-                      }
-                    : null
-                }
-              />
-            ))
-          )}
-        </View>
-      </View>
+        }
+        renderItem={({ item }) => (
+          <CryptoCard
+            symbol={item.symbol}
+            entryPrice={item.entry}
+            targetPrice={item.target}
+            stopPrice={item.stop}
+            score={item.score}
+          />
+        )}
+      />
     </SafeAreaView>
   );
 }
