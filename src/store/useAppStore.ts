@@ -13,10 +13,12 @@ import {
 import {
   appendUserReports,
   createUser,
+  getUserApiCredentials,
   getUserPositions,
   getUserReports,
   getUserSettings,
   replaceUserPositions,
+  upsertUserApiCredentials,
   upsertUserSettings,
   verifyLogin,
 } from '../services/userDb';
@@ -54,6 +56,8 @@ type AppState = {
   lastScanMs: number | null;
   positions: ActivePosition[];
   reports: TradeReport[];
+  scanPool: ScannedCandidate[];
+  scanPoolUpdatedAtMs: number | null;
   recentlyClosedSymbols: Record<string, number>;
   settings: AppSettings;
   setLocalHydrated: (hydrated: boolean) => void;
@@ -67,6 +71,9 @@ type AppState = {
   setPositions: (items: ActivePosition[], asOfMs: number) => void;
   closePositionManually: (params: { symbol: string }) => void;
   appendReports: (items: TradeReport[]) => void;
+  refreshReportsFromServer: () => Promise<void>;
+  setScanPool: (items: ScannedCandidate[], asOfMs: number) => void;
+  takeFromScanPool: (params: { needed: number; excludeSymbols: string[] }) => ScannedCandidate[];
   addRecentlyClosedSymbols: (symbols: string[], atMs: number) => void;
   updateSettings: (partial: Partial<AppSettings>) => void;
 };
@@ -111,7 +118,56 @@ function mergeReportsById(existing: TradeReport[], incoming: TradeReport[]): Tra
   const byId = new Map<string, TradeReport>();
   for (const r of existing) byId.set(r.id, r);
   for (const r of incoming) byId.set(r.id, r);
-  return Array.from(byId.values()).sort((a, b) => b.closedAtMs - a.closedAtMs);
+  return normalizeAndDedupeReports(Array.from(byId.values()));
+}
+
+function normalizeAndDedupeReports(items: TradeReport[]): TradeReport[] {
+  const byKey = new Map<string, TradeReport>();
+
+  for (const r of items) {
+    const symbol = String(r.symbol || '').trim().toUpperCase();
+    const openedAtMs = Number(r.openedAtMs);
+    const closedAtMs = Number(r.closedAtMs);
+    const outcome = r.outcome === 'TP' ? 'TP' : 'SL';
+    const entry = Number(r.entry);
+    const exit = Number(r.exit);
+    const pnlPct = Number(r.pnlPct);
+    const riskRewardAtEntry = Number(r.riskRewardAtEntry);
+
+    if (!symbol) continue;
+    if (!Number.isFinite(openedAtMs) || !Number.isFinite(closedAtMs)) continue;
+    if (!Number.isFinite(entry) || !Number.isFinite(exit)) continue;
+    if (!Number.isFinite(pnlPct) || !Number.isFinite(riskRewardAtEntry)) continue;
+
+    const normalized: TradeReport = {
+      id: String(r.id || '').trim() || `${symbol}-${openedAtMs}-${outcome}`,
+      symbol,
+      openedAtMs,
+      closedAtMs,
+      entry,
+      exit,
+      outcome,
+      pnlPct,
+      riskRewardAtEntry,
+    };
+
+    const key = `${symbol}|${openedAtMs}|${outcome}`;
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, normalized);
+      continue;
+    }
+
+    if (normalized.closedAtMs > existing.closedAtMs) {
+      byKey.set(key, normalized);
+      continue;
+    }
+    if (normalized.closedAtMs === existing.closedAtMs && normalized.id < existing.id) {
+      byKey.set(key, normalized);
+    }
+  }
+
+  return Array.from(byKey.values()).sort((a, b) => b.closedAtMs - a.closedAtMs);
 }
 
 async function queuePendingSync(userId: string, patch: PendingSync): Promise<void> {
@@ -221,6 +277,8 @@ export const useAppStore = create<AppState>()(
       lastScanMs: null,
       positions: [],
       reports: [],
+      scanPool: [],
+      scanPoolUpdatedAtMs: null,
       recentlyClosedSymbols: {},
       settings: DEFAULT_SETTINGS,
 
@@ -231,7 +289,26 @@ export const useAppStore = create<AppState>()(
       hydrateSecure: async () => {
         try {
           const credentials = await getApiCredentials();
-          set({ apiCredentials: credentials, hasSecureHydrated: true });
+          if (credentials) {
+            set({ apiCredentials: credentials, hasSecureHydrated: true });
+            return;
+          }
+
+          const snapshot = get();
+          const userId = snapshot.user?.id;
+          if (snapshot.isSignedIn && userId) {
+            try {
+              const remote = await getUserApiCredentials(userId);
+              if (remote?.apiKey && remote.apiSecret) {
+                await setApiCredentials({ apiKey: remote.apiKey, apiSecret: remote.apiSecret });
+                set({ apiCredentials: { apiKey: remote.apiKey, apiSecret: remote.apiSecret }, hasSecureHydrated: true });
+                return;
+              }
+            } catch {
+            }
+          }
+
+          set({ apiCredentials: null, hasSecureHydrated: true });
         } catch {
           set({ apiCredentials: null, hasSecureHydrated: true });
         }
@@ -239,10 +316,11 @@ export const useAppStore = create<AppState>()(
 
       signInWithEmail: async ({ email, password }) => {
         const user = await verifyLogin({ email, password });
-        const [settingsRow, positionsRows, reportsRows] = await Promise.all([
+        const [settingsRow, positionsRows, reportsRows, apiCredsRow] = await Promise.all([
           getUserSettings(user.id),
           getUserPositions(user.id),
           getUserReports(user.id),
+          getUserApiCredentials(user.id),
         ]);
 
         const settings: AppSettings = settingsRow
@@ -312,9 +390,7 @@ export const useAppStore = create<AppState>()(
             await queuePendingSync(user.id, { reports: toPersist });
           }
         }
-        const mergedReports = Array.from(reportById.values()).sort(
-          (a, b) => b.closedAtMs - a.closedAtMs,
-        );
+        const mergedReports = normalizeAndDedupeReports(Array.from(reportById.values()));
 
         const pending = await readPendingForUser(user.id);
         const effectiveSettings = pending?.settings ? pending.settings : settings;
@@ -332,6 +408,14 @@ export const useAppStore = create<AppState>()(
           watchlist: effectivePositions.length > 0 ? effectivePositions : get().watchlist,
           reports: effectiveReports,
         });
+
+        if (apiCredsRow?.apiKey && apiCredsRow.apiSecret) {
+          try {
+            await setApiCredentials({ apiKey: apiCredsRow.apiKey, apiSecret: apiCredsRow.apiSecret });
+          } catch {
+          }
+          set({ apiCredentials: { apiKey: apiCredsRow.apiKey, apiSecret: apiCredsRow.apiSecret } });
+        }
 
         if (pending) {
           void flushPendingToDb({
@@ -386,6 +470,8 @@ export const useAppStore = create<AppState>()(
           lastScanMs: null,
           positions: [],
           reports: [],
+          scanPool: [],
+          scanPoolUpdatedAtMs: null,
           settings: DEFAULT_SETTINGS,
           recentlyClosedSymbols: {},
         });
@@ -401,6 +487,14 @@ export const useAppStore = create<AppState>()(
 
         await setApiCredentials({ apiKey, apiSecret });
         set({ apiCredentials: { apiKey, apiSecret } });
+
+        const userId = get().user?.id;
+        if (get().isSignedIn && userId) {
+          try {
+            await upsertUserApiCredentials({ userId, apiKey, apiSecret });
+          } catch {
+          }
+        }
       },
 
       forgetApiCredentials: async () => {
@@ -420,7 +514,6 @@ export const useAppStore = create<AppState>()(
       setPositions: (items, asOfMs) => {
         set({
           positions: items,
-          watchlist: items,
           lastScanMs: asOfMs,
         });
 
@@ -465,12 +558,7 @@ export const useAppStore = create<AppState>()(
       appendReports: (items) => {
         if (items.length === 0) return;
         const current = get().reports;
-        const byId = new Map<string, TradeReport>();
-        for (const r of items) byId.set(r.id, r);
-        for (const r of current) {
-          if (!byId.has(r.id)) byId.set(r.id, r);
-        }
-        const next = Array.from(byId.values()).sort((a, b) => b.closedAtMs - a.closedAtMs);
+        const next = mergeReportsById(current, items);
         set({ reports: next });
 
         const userId = get().user?.id;
@@ -498,6 +586,67 @@ export const useAppStore = create<AppState>()(
             }
           });
         }
+      },
+
+      refreshReportsFromServer: async () => {
+        const state = get();
+        const userId = state.user?.id;
+        if (!state.isSignedIn || !userId) return;
+        try {
+          const rows = await getUserReports(userId);
+          const fromServer: TradeReport[] = rows.map((r) => ({
+            id: String(r.id),
+            symbol: String(r.symbol),
+            openedAtMs: Number(r.openedAtMs),
+            closedAtMs: Number(r.closedAtMs),
+            entry: Number(r.entry),
+            exit: Number(r.exit),
+            outcome: r.outcome === 'TP' ? 'TP' : 'SL',
+            pnlPct: Number(r.pnlPct),
+            riskRewardAtEntry: Number(r.riskRewardAtEntry),
+          }));
+
+          const pending = await readPendingForUser(userId);
+          const merged = normalizeAndDedupeReports([
+            ...fromServer,
+            ...(pending?.reports ?? []),
+            ...state.reports,
+          ]);
+          set({ reports: merged });
+        } catch {
+        }
+      },
+
+      setScanPool: (items, asOfMs) => {
+        set({ scanPool: items, scanPoolUpdatedAtMs: asOfMs });
+      },
+
+      takeFromScanPool: ({ needed, excludeSymbols }) => {
+        const count = Math.max(0, Math.trunc(needed));
+        if (count === 0) return [];
+        const excluded = new Set(excludeSymbols.map((s) => s.trim().toUpperCase()).filter(Boolean));
+        const pool = get().scanPool;
+        if (pool.length === 0) return [];
+        const picked: ScannedCandidate[] = [];
+        const remaining: ScannedCandidate[] = [];
+
+        for (const c of pool) {
+          const sym = String(c.symbol || '').trim().toUpperCase();
+          if (!sym) continue;
+          if (excluded.has(sym)) {
+            remaining.push({ ...c, symbol: sym });
+            continue;
+          }
+          if (picked.length < count) {
+            picked.push({ ...c, symbol: sym });
+            excluded.add(sym);
+          } else {
+            remaining.push({ ...c, symbol: sym });
+          }
+        }
+
+        set({ scanPool: remaining });
+        return picked;
       },
 
       addRecentlyClosedSymbols: (symbols, atMs) => {
@@ -563,6 +712,5 @@ export function selectAppReady(state: Pick<AppState, 'hasLocalHydrated' | 'hasSe
 
 export function selectAuthPhase(state: Pick<AppState, 'isSignedIn' | 'apiCredentials'>): 'signedOut' | 'needsApiCredentials' | 'ready' {
   if (!state.isSignedIn) return 'signedOut';
-  if (!state.apiCredentials) return 'needsApiCredentials';
   return 'ready';
 }

@@ -6,7 +6,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { CryptoCard } from '../components/CryptoCard/CryptoCard';
 import { binanceWS } from '../services/binanceWebSocket';
-import { applyLivePricesAndRotate, runInitialScanAndSetPositions } from '../services/botController';
+import { applyLivePricesAndRotate, runBotCycle, runInitialScanAndSetPositions } from '../services/botController';
 import { scanTop3 } from '../services/tradingEngine';
 import { usePriceHistoryStore } from '../store/priceHistoryStore';
 import { useAppStore } from '../store/useAppStore';
@@ -29,7 +29,18 @@ export function DashboardScreen() {
 
   const scanQuery = useQuery({
     queryKey: ['scanTop3', minRiskReward],
-    queryFn: async () => scanTop3({ minRiskReward }),
+    queryFn: async () => {
+      try {
+        return await scanTop3({ minRiskReward });
+      } catch {
+        return {
+          asOfMs: Date.now(),
+          quoteAsset: 'TRY',
+          topCandidates: watchlist.slice(0, 3),
+          rejected: [],
+        };
+      }
+    },
     staleTime: 60_000,
     gcTime: 10 * 60_000,
     refetchOnMount: true,
@@ -44,14 +55,49 @@ export function DashboardScreen() {
     setWatchlist(next, asOfMs);
   }, [lastScanMs, scanQuery.data?.asOfMs, scanQuery.data?.topCandidates, setWatchlist]);
 
-  const candidates =
-    autoTradeEnabled && positions.length > 0
-      ? positions
-      : watchlist.length > 0
-        ? watchlist
-        : scanQuery.data?.topCandidates ?? [];
   const showingPositions = autoTradeEnabled && positions.length > 0;
-  const symbols = React.useMemo(() => candidates.map((c) => c.symbol), [candidates]);
+  const candidates = React.useMemo(() => {
+    const base =
+      autoTradeEnabled && positions.length > 0
+        ? positions
+        : watchlist.length > 0
+          ? watchlist
+          : scanQuery.data?.topCandidates ?? [];
+
+    const pool = autoTradeEnabled
+      ? [...base, ...watchlist, ...(scanQuery.data?.topCandidates ?? [])]
+      : base;
+
+    const out: typeof base = [];
+    const seen = new Set<string>();
+    for (const item of pool) {
+      const sym = String(item.symbol || '').trim().toUpperCase();
+      if (!sym) continue;
+      if (seen.has(sym)) continue;
+      seen.add(sym);
+      out.push({ ...item, symbol: sym });
+      if (out.length >= 3) break;
+    }
+    return out;
+  }, [autoTradeEnabled, positions, scanQuery.data?.topCandidates, watchlist]);
+
+  type Row =
+    | ({ kind: 'crypto' } & (typeof candidates)[number])
+    | { kind: 'empty'; id: string };
+
+  const rows = React.useMemo<Row[]>(() => {
+    const cryptoRows: Row[] = candidates.map((c) => ({ ...c, kind: 'crypto' }));
+    const missing = Math.max(0, 3 - cryptoRows.length);
+    for (let i = 0; i < missing; i += 1) {
+      cryptoRows.push({ kind: 'empty', id: `empty-${i}` });
+    }
+    return cryptoRows;
+  }, [candidates]);
+
+  const symbols = React.useMemo(
+    () => rows.filter((r): r is Extract<Row, { kind: 'crypto' }> => r.kind === 'crypto').map((r) => r.symbol),
+    [rows],
+  );
 
   React.useEffect(() => {
     const key = symbols.join('|');
@@ -88,8 +134,8 @@ export function DashboardScreen() {
         <View className="absolute -bottom-32 -right-32 h-96 w-96 rounded-full bg-neon-green/5" />
       </View>
       <FlatList
-        data={candidates}
-        keyExtractor={(item) => item.symbol}
+        data={rows}
+        keyExtractor={(item) => (item.kind === 'empty' ? item.id : item.symbol)}
         contentContainerStyle={{ paddingTop: 24, paddingBottom: 24 }}
         ListHeaderComponent={
           <View className="px-6">
@@ -150,14 +196,6 @@ export function DashboardScreen() {
               </Text>
             </View>
 
-            {scanQuery.isError ? (
-              <View className="mt-4 rounded-2xl border border-[#2a1b22] bg-[#12090d] px-4 py-3">
-                <Text className="text-sm text-neon-red">
-                  Tarama hatası. Tekrar dene.
-                </Text>
-              </View>
-            ) : null}
-
             {scanQuery.isLoading && candidates.length === 0 ? (
               <View className="mt-6 gap-4">
                 <View className="h-[180px] rounded-2xl border border-outline-500/35 bg-bg-900/60" />
@@ -167,23 +205,40 @@ export function DashboardScreen() {
             ) : null}
           </View>
         }
-        renderItem={({ item }) => (
-          <CryptoCard
-            symbol={item.symbol}
-            entryPrice={item.entry}
-            targetPrice={item.target}
-            stopPrice={item.stop}
-            score={item.score}
-            onClose={
-              showingPositions
-                ? () => {
-                    const sym = item.symbol.trim().toUpperCase();
-                    closePositionManually({ symbol: sym });
-                  }
-                : undefined
-            }
-          />
-        )}
+        renderItem={({ item }) => {
+          if (item.kind === 'empty') {
+            return (
+              <View style={{ marginHorizontal: 16, marginVertical: 8 }}>
+                <View className="overflow-hidden rounded-2xl border border-outline-500/35 bg-bg-900/60">
+                  <View className="p-5">
+                    <Text className="text-[15px] font-semibold text-gray-200">
+                      Tarama Sonucu Uygun Kripto Bulunamadı
+                    </Text>
+                  </View>
+                </View>
+              </View>
+            );
+          }
+
+          return (
+            <CryptoCard
+              symbol={item.symbol}
+              entryPrice={item.entry}
+              targetPrice={item.target}
+              stopPrice={item.stop}
+              score={item.score}
+              onClose={
+                showingPositions
+                  ? () => {
+                      const sym = item.symbol.trim().toUpperCase();
+                      closePositionManually({ symbol: sym });
+                      void runBotCycle().catch(() => {});
+                    }
+                  : undefined
+              }
+            />
+          );
+        }}
       />
     </SafeAreaView>
   );

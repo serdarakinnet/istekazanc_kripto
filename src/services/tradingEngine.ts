@@ -23,6 +23,7 @@ export type ScanOptions = {
   topNByQuoteVolume?: number;
   excludeBases?: string[];
   excludeSymbols?: string[];
+  pickTopK?: number;
   klineInterval?: '1h';
   klineLimit?: number;
   minRiskReward?: number;
@@ -76,14 +77,22 @@ export type ScanResult = {
   }>;
 };
 
-const DEFAULT_API_BASE_URL =
-  Platform.OS === 'web'
-    ? 'http://localhost:3001'
-    : Platform.OS === 'android'
-      ? 'http://10.0.2.2:3001'
-      : 'http://localhost:3001';
+function resolveApiBaseUrl(): string {
+  const env = String(process.env.EXPO_PUBLIC_API_BASE_URL || '').trim();
+  if (env) return env.replace(/\/+$/, '');
 
-const API_BASE_URL = String(process.env.EXPO_PUBLIC_API_BASE_URL || DEFAULT_API_BASE_URL).replace(/\/+$/, '');
+  if (Platform.OS === 'web') {
+    const g = globalThis as unknown as { location?: { protocol?: string; hostname?: string } };
+    const protocol = g.location?.protocol || 'http:';
+    const hostname = g.location?.hostname || 'localhost';
+    return `${protocol}//${hostname}:3001`;
+  }
+
+  if (Platform.OS === 'android') return 'http://10.0.2.2:3001';
+  return 'http://localhost:3001';
+}
+
+const API_BASE_URL = resolveApiBaseUrl();
 
 const DEFAULTS: Required<
   Pick<
@@ -93,6 +102,7 @@ const DEFAULTS: Required<
     | 'topNByQuoteVolume'
     | 'excludeBases'
     | 'excludeSymbols'
+    | 'pickTopK'
     | 'klineInterval'
     | 'klineLimit'
     | 'minRiskReward'
@@ -115,6 +125,7 @@ const DEFAULTS: Required<
     'XAUT',
   ],
   excludeSymbols: [],
+  pickTopK: 3,
   klineInterval: '1h',
   klineLimit: 200,
   minRiskReward: 1.8,
@@ -164,6 +175,15 @@ async function fetchJson<T>(
   init: RequestInit | undefined,
   timeoutMs: number,
 ): Promise<T> {
+  if (Platform.OS === 'web') {
+    try {
+      const url = new URL(input);
+      if (url.hostname === 'data-api.binance.vision') {
+        throw new Error('Web üzerinde piyasa verisi proxy üzerinden alınmalıdır.');
+      }
+    } catch {
+    }
+  }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -252,16 +272,105 @@ function clampMin(value: number, min: number): number {
   return value < min ? min : value;
 }
 
+async function fetchTicker24hViaWebSocket(timeoutMs: number): Promise<BinanceTicker24h[]> {
+  const url = 'wss://data-stream.binance.vision/ws/!ticker@arr';
+  return await new Promise<BinanceTicker24h[]>((resolve, reject) => {
+    let done = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let ws: WebSocket | null = null;
+
+    const finish = (value: { ok: true; data: BinanceTicker24h[] } | { ok: false; error: Error }) => {
+      if (done) return;
+      done = true;
+      if (timer) clearTimeout(timer);
+      timer = null;
+      try {
+        if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+          ws.close();
+        }
+      } catch {
+      }
+      ws = null;
+
+      if (value.ok) resolve(value.data);
+      else reject(value.error);
+    };
+
+    try {
+      ws = new WebSocket(url);
+    } catch {
+      finish({ ok: false, error: new Error('Ticker stream açılamadı.') });
+      return;
+    }
+
+    timer = setTimeout(() => {
+      finish({ ok: false, error: new Error('Ticker stream timeout.') });
+    }, Math.max(1000, timeoutMs));
+
+    ws.onmessage = (event) => {
+      const text = typeof event.data === 'string' ? event.data : null;
+      if (!text) return;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        return;
+      }
+      if (!Array.isArray(parsed)) return;
+
+      const out: BinanceTicker24h[] = [];
+      for (const it of parsed) {
+        const obj = it as { s?: unknown; c?: unknown; P?: unknown; q?: unknown };
+        const symbol = typeof obj.s === 'string' ? obj.s : null;
+        const lastPrice = typeof obj.c === 'string' ? obj.c : obj.c !== undefined ? String(obj.c) : null;
+        const priceChangePercent =
+          typeof obj.P === 'string' ? obj.P : obj.P !== undefined ? String(obj.P) : null;
+        const quoteVolume = typeof obj.q === 'string' ? obj.q : obj.q !== undefined ? String(obj.q) : null;
+        if (!symbol || !lastPrice || !priceChangePercent || !quoteVolume) continue;
+        out.push({ symbol, lastPrice, priceChangePercent, quoteVolume });
+      }
+      if (out.length === 0) return;
+      finish({ ok: true, data: out });
+    };
+
+    ws.onerror = () => {
+      finish({ ok: false, error: new Error('Ticker stream hatası.') });
+    };
+  });
+}
+
 export async function fetchTicker24h(
   options?: Pick<ScanOptions, 'baseUrl' | 'timeoutMs'>,
 ): Promise<BinanceTicker24h[]> {
   const baseUrl = options?.baseUrl ?? DEFAULTS.baseUrl;
   const timeoutMs = options?.timeoutMs ?? DEFAULTS.timeoutMs;
-  const url = buildUrl(baseUrl, '/api/v3/ticker/24hr');
+  let raw: unknown;
+  if (Platform.OS === 'web') {
+    try {
+      raw = await fetchTicker24hViaWebSocket(timeoutMs);
+    } catch {
+      try {
+        const url = buildUrl(API_BASE_URL, '/market/ticker/24hr', {
+          timeoutMs: String(timeoutMs),
+        });
+        const body = await fetchJson<{ ok?: unknown; data?: unknown }>(url, undefined, timeoutMs);
+        raw = body?.ok === true ? body.data : [];
+      } catch {
+        raw = [];
+      }
+    }
+  } else {
+    const url = buildUrl(baseUrl, '/api/v3/ticker/24hr');
+    try {
+      raw = await fetchJson<unknown[]>(url, undefined, timeoutMs);
+    } catch {
+      raw = await fetchTicker24hViaWebSocket(timeoutMs);
+    }
+  }
 
-  const raw = await fetchJson<unknown[]>(url, undefined, timeoutMs);
+  const list = Array.isArray(raw) ? raw : [];
 
-  const tickers: BinanceTicker24h[] = raw
+  const tickers: BinanceTicker24h[] = list
     .map((item) => {
       const obj = item as Partial<Record<keyof BinanceTicker24h, unknown>>;
       if (typeof obj.symbol !== 'string') return null;
@@ -318,16 +427,32 @@ export async function fetchKlines(
   const limit = options?.klineLimit ?? DEFAULTS.klineLimit;
   const timeoutMs = options?.timeoutMs ?? DEFAULTS.timeoutMs;
 
-  const url = buildUrl(baseUrl, '/api/v3/klines', {
-    symbol,
-    interval,
-    limit: String(limit),
-  });
+  let raw: unknown;
+  if (Platform.OS === 'web') {
+    const url = buildUrl(API_BASE_URL, '/market/klines', {
+      symbol,
+      interval,
+      limit: String(limit),
+      timeoutMs: String(timeoutMs),
+    });
+    const body = await fetchJson<{ ok?: unknown; data?: unknown }>(url, undefined, timeoutMs);
+    if (body?.ok !== true || !Array.isArray(body?.data) || body.data.length === 0) {
+      throw new Error('Kline proxy başarısız.');
+    }
+    raw = body.data;
+  } else {
+    const url = buildUrl(baseUrl, '/api/v3/klines', {
+      symbol,
+      interval,
+      limit: String(limit),
+    });
+    raw = await fetchJson<unknown[]>(url, undefined, timeoutMs);
+  }
 
-  const raw = await fetchJson<unknown[]>(url, undefined, timeoutMs);
+  const list = Array.isArray(raw) ? raw : [];
   const parsed: BinanceKline[] = [];
 
-  for (const item of raw) {
+  for (const item of list) {
     if (!Array.isArray(item) || item.length < 7) continue;
     const openTimeMs = ensureFiniteNumber(item[0], 'openTimeMs');
     const open = ensureFiniteNumber(item[1], 'open');
@@ -791,6 +916,7 @@ export async function runDeepFibonacciEngine(
     topNByQuoteVolume: options?.topNByQuoteVolume ?? DEFAULTS.topNByQuoteVolume,
     excludeBases: options?.excludeBases ?? DEFAULTS.excludeBases,
     excludeSymbols: options?.excludeSymbols ?? DEFAULTS.excludeSymbols,
+    pickTopK: options?.pickTopK ?? DEFAULTS.pickTopK,
     klineInterval: options?.klineInterval ?? DEFAULTS.klineInterval,
     klineLimit: options?.klineLimit ?? DEFAULTS.klineLimit,
     minRiskReward: options?.minRiskReward ?? DEFAULTS.minRiskReward,
@@ -798,11 +924,16 @@ export async function runDeepFibonacciEngine(
     timeoutMs: options?.timeoutMs ?? DEFAULTS.timeoutMs,
   };
 
-  const allowed = await fetchBinanceTrAllowedSymbols({
-    quoteAsset: merged.quoteAsset,
-    timeoutMs: merged.timeoutMs,
-  });
-  const filteredTickers = tickers.filter((t) => allowed.has(String(t.symbol).trim().toUpperCase()));
+  let filteredTickers = tickers;
+  try {
+    const allowed = await fetchBinanceTrAllowedSymbols({
+      quoteAsset: merged.quoteAsset,
+      timeoutMs: merged.timeoutMs,
+    });
+    filteredTickers = tickers.filter((t) => allowed.has(String(t.symbol).trim().toUpperCase()));
+  } catch {
+    filteredTickers = tickers;
+  }
 
   const universe = filterTopPairsByQuoteVolume(filteredTickers, merged);
   const rejected: ScanResult['rejected'] = [];
@@ -870,7 +1001,10 @@ export async function runDeepFibonacciEngine(
   );
 
   const picked = candidates.filter((x): x is ScannedCandidate => Boolean(x));
-  const topCandidates = sortDescNumeric(picked, (c) => c.score).slice(0, 3);
+  const topCandidates = sortDescNumeric(picked, (c) => c.score).slice(
+    0,
+    Math.max(1, Math.trunc(merged.pickTopK)),
+  );
 
   return {
     asOfMs: Date.now(),
@@ -880,7 +1014,98 @@ export async function runDeepFibonacciEngine(
   };
 }
 
+function buildLiteCandidatesFromTickers(
+  tickers: BinanceTicker24h[],
+  options?: ScanOptions,
+): ScanResult {
+  const merged: Required<ScanOptions> = {
+    baseUrl: options?.baseUrl ?? DEFAULTS.baseUrl,
+    quoteAsset: options?.quoteAsset ?? DEFAULTS.quoteAsset,
+    topNByQuoteVolume: options?.topNByQuoteVolume ?? DEFAULTS.topNByQuoteVolume,
+    excludeBases: options?.excludeBases ?? DEFAULTS.excludeBases,
+    excludeSymbols: options?.excludeSymbols ?? DEFAULTS.excludeSymbols,
+    pickTopK: options?.pickTopK ?? DEFAULTS.pickTopK,
+    klineInterval: options?.klineInterval ?? DEFAULTS.klineInterval,
+    klineLimit: options?.klineLimit ?? DEFAULTS.klineLimit,
+    minRiskReward: options?.minRiskReward ?? DEFAULTS.minRiskReward,
+    concurrency: options?.concurrency ?? DEFAULTS.concurrency,
+    timeoutMs: options?.timeoutMs ?? DEFAULTS.timeoutMs,
+  };
+
+  const universe = filterTopPairsByQuoteVolume(tickers, merged);
+
+  const n = universe.length;
+  const k = Math.max(1, Math.trunc(merged.pickTopK));
+
+  const candidates: ScannedCandidate[] = [];
+  for (let i = 0; i < universe.length; i += 1) {
+    const t = universe[i];
+    const symbol = String(t.symbol || '').trim().toUpperCase();
+    const lastPrice = ensureFiniteNumber(t.lastPrice, 'lastPrice');
+    const lastChangePercent = ensureFiniteNumber(t.priceChangePercent, 'priceChangePercent');
+    if (lastChangePercent < 0) continue;
+    if (lastChangePercent > 10) continue;
+
+    const volRankScore = n <= 1 ? 60 : 60 * (1 - i / (n - 1));
+    const trendScore = 40 * (Math.max(0, Math.min(10, lastChangePercent)) / 10);
+    const score = Math.max(0, Math.min(100, Math.round(volRankScore + trendScore)));
+
+    const entry = Number(lastPrice.toFixed(8));
+    const stop = Number((entry * 0.97).toFixed(8));
+    const riskRaw = (entry - stop) / entry;
+    const rr = merged.minRiskReward;
+    const target = Number((entry * (1 + Math.max(0, riskRaw) * rr)).toFixed(8));
+
+    candidates.push({
+      symbol,
+      score,
+      scoreBreakdown: {
+        freshCross: false,
+        trendOk: lastChangePercent >= 0,
+        priceAboveEma21: false,
+        breakout: false,
+        pullbackReclaim: false,
+        volMultOk: true,
+        ema21SlopeUp: false,
+        flatPenalty: false,
+        pumpPenalty: false,
+      },
+      entry,
+      target,
+      stop,
+      riskReward: rr,
+      lastPrice,
+      lastChangePercent,
+      ema5: 0,
+      ema21: 0,
+      ema144: 0,
+      volMult: 0,
+    });
+
+    if (candidates.length >= k) break;
+  }
+
+  return {
+    asOfMs: Date.now(),
+    quoteAsset: merged.quoteAsset,
+    topCandidates: candidates,
+    rejected: [],
+  };
+}
+
 export async function scanTop3(options?: ScanOptions): Promise<ScanResult> {
+  return scanTop({ ...options, pickTopK: 3 });
+}
+
+export async function scanTop(options?: ScanOptions): Promise<ScanResult> {
   const tickers = await fetchTicker24h(options);
-  return runDeepFibonacciEngine(tickers, options);
+  const desired = Math.max(1, Math.trunc(options?.pickTopK ?? DEFAULTS.pickTopK));
+  try {
+    const deep = await runDeepFibonacciEngine(tickers, options);
+    if (deep.topCandidates.length >= Math.min(3, desired) && deep.topCandidates.length > 0) {
+      return deep;
+    }
+  } catch {
+  }
+  return buildLiteCandidatesFromTickers(tickers, options);
 }

@@ -38,6 +38,13 @@ export type TradeReportRecord = {
   createdAtMs: number;
 };
 
+export type UserApiCredentialsRecord = {
+  userId: string;
+  apiKey: string;
+  apiSecret: string;
+  updatedAtMs: number;
+};
+
 type CreateUserParams = {
   email: string;
   password: string;
@@ -48,14 +55,28 @@ type VerifyLoginParams = {
   email: string;
   password: string;
 };
-const DEFAULT_API_BASE_URL =
-  Platform.OS === 'web'
-    ? 'http://localhost:3001'
-    : Platform.OS === 'android'
-      ? 'http://10.0.2.2:3001'
-      : 'http://localhost:3001';
+function resolveApiBaseUrl(): string {
+  const env = String(process.env.EXPO_PUBLIC_API_BASE_URL || '').trim();
+  if (env) return env.replace(/\/+$/, '');
 
-const API_BASE_URL = String(process.env.EXPO_PUBLIC_API_BASE_URL || DEFAULT_API_BASE_URL).replace(/\/+$/, '');
+  if (Platform.OS === 'web') {
+    const g = globalThis as unknown as { location?: { protocol?: string; hostname?: string } };
+    const protocol = g.location?.protocol || 'http:';
+    const hostname = g.location?.hostname || 'localhost';
+    return `${protocol}//${hostname}:3001`;
+  }
+
+  if (Platform.OS === 'android') return 'http://10.0.2.2:3001';
+  return 'http://localhost:3001';
+}
+
+const API_BASE_URL = resolveApiBaseUrl();
+let apiUnavailableUntilMs = 0;
+let apiFailureCount = 0;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 async function readErrorMessage(res: Response): Promise<string> {
   try {
@@ -76,24 +97,46 @@ async function readErrorMessage(res: Response): Promise<string> {
 
 async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const url = `${API_BASE_URL}${path}`;
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      ...init,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(init?.headers ?? {}),
-      },
-    });
-  } catch {
+  const maxAttempts = 3;
+  const now = Date.now();
+  if (now < apiUnavailableUntilMs) {
     throw new Error('Sunucuya bağlanılamadı.');
   }
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        ...init,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(init?.headers ?? {}),
+        },
+      });
+    } catch {
+      if (attempt < maxAttempts) {
+        await sleep(400 * 2 ** (attempt - 1));
+        continue;
+      }
+      apiFailureCount = Math.min(8, apiFailureCount + 1);
+      apiUnavailableUntilMs =
+        Date.now() + Math.min(60_000, 1000 * 2 ** (apiFailureCount - 1));
+      throw new Error('Sunucuya bağlanılamadı.');
+    }
 
-  if (!res.ok) {
+    if (res.ok) {
+      apiFailureCount = 0;
+      apiUnavailableUntilMs = 0;
+      return (await res.json()) as T;
+    }
     const msg = await readErrorMessage(res);
+    if (attempt < maxAttempts && res.status >= 500) {
+      await sleep(400 * 2 ** (attempt - 1));
+      continue;
+    }
     throw new Error(msg);
   }
-  return (await res.json()) as T;
+
+  throw new Error('Sunucuya bağlanılamadı.');
 }
 
 export async function initUserDb(): Promise<void> {
@@ -209,5 +252,27 @@ export async function appendUserReports(params: {
   await apiRequest<{ ok: true }>(`/users/${encodeURIComponent(trimmedUserId)}/reports`, {
     method: 'POST',
     body: JSON.stringify({ reports: params.reports }),
+  });
+}
+
+export async function getUserApiCredentials(userId: string): Promise<UserApiCredentialsRecord | null> {
+  const trimmedUserId = userId.trim();
+  if (!trimmedUserId) return null;
+  return await apiRequest<UserApiCredentialsRecord | null>(
+    `/users/${encodeURIComponent(trimmedUserId)}/api-credentials`,
+    { method: 'GET' },
+  );
+}
+
+export async function upsertUserApiCredentials(params: {
+  userId: string;
+  apiKey: string;
+  apiSecret: string;
+}): Promise<void> {
+  const trimmedUserId = params.userId.trim();
+  if (!trimmedUserId) throw new Error('Kullanıcı bulunamadı.');
+  await apiRequest<{ ok: true }>(`/users/${encodeURIComponent(trimmedUserId)}/api-credentials`, {
+    method: 'PUT',
+    body: JSON.stringify({ apiKey: params.apiKey, apiSecret: params.apiSecret }),
   });
 }

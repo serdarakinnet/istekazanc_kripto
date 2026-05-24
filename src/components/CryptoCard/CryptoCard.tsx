@@ -20,7 +20,19 @@ function clamp(value: number, min: number, max: number): number {
 
 function formatTry(value: number): string {
   if (!Number.isFinite(value)) return '—';
-  return `₺${value.toFixed(4)}`;
+  const abs = Math.abs(value);
+  const digits =
+    abs >= 1000 ? 2 : abs >= 1 ? 4 : abs >= 0.1 ? 5 : abs >= 0.01 ? 6 : 8;
+  try {
+    return new Intl.NumberFormat('tr-TR', {
+      style: 'currency',
+      currency: 'TRY',
+      minimumFractionDigits: 0,
+      maximumFractionDigits: digits,
+    }).format(value);
+  } catch {
+    return `₺${value.toFixed(digits)}`;
+  }
 }
 
 function formatPct(value: number): string {

@@ -3,8 +3,8 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: tradefeed
-      POSTGRES_USER: postgres
+      POSTGRES_DB: ${POSTGRES_DB:-tradefeed}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     ports:
       - "5432:5432"

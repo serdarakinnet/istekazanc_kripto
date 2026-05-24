@@ -133,7 +133,7 @@ export function RootNavigator() {
   }
 
   const initialAuthRoute: keyof AuthStackParamList =
-    authPhase === 'needsApiCredentials' ? 'ApiKeys' : 'Login';
+    'Login';
 
   return (
     <NavigationContainer theme={navTheme}>
