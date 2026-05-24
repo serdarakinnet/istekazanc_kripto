@@ -18,6 +18,7 @@ export function DashboardScreen() {
   const positions = useAppStore((s) => s.positions);
   const lastScanMs = useAppStore((s) => s.lastScanMs);
   const setWatchlist = useAppStore((s) => s.setWatchlist);
+  const closePositionManually = useAppStore((s) => s.closePositionManually);
 
   const lastRotateMsRef = React.useRef(0);
 
@@ -49,6 +50,7 @@ export function DashboardScreen() {
       : watchlist.length > 0
         ? watchlist
         : scanQuery.data?.topCandidates ?? [];
+  const showingPositions = autoTradeEnabled && positions.length > 0;
   const symbols = React.useMemo(() => candidates.map((c) => c.symbol), [candidates]);
 
   React.useEffect(() => {
@@ -81,6 +83,10 @@ export function DashboardScreen() {
 
   return (
     <SafeAreaView className="flex-1 bg-bg-950">
+      <View className="absolute inset-0">
+        <View className="absolute -left-32 -top-32 h-96 w-96 rounded-full bg-neon-cyan/10" />
+        <View className="absolute -bottom-32 -right-32 h-96 w-96 rounded-full bg-neon-green/5" />
+      </View>
       <FlatList
         data={candidates}
         keyExtractor={(item) => item.symbol}
@@ -100,14 +106,14 @@ export function DashboardScreen() {
                     className={[
                       'rounded-full border px-2 py-1',
                       autoTradeEnabled
-                        ? 'border-[#13241b] bg-[#07130d]'
-                        : 'border-[#1c2430] bg-bg-900',
+                        ? 'border-neon-green/20 bg-neon-green/10'
+                        : 'border-outline-500/35 bg-bg-900/60',
                     ].join(' ')}
                   >
                     <Text
                       className={[
                         'text-[10px] font-semibold',
-                        autoTradeEnabled ? 'text-[#00ff88]' : 'text-gray-400',
+                        autoTradeEnabled ? 'text-neon-green' : 'text-outline-400',
                       ].join(' ')}
                     >
                       {autoTradeEnabled ? 'AUTO-TRADE AÇIK' : 'AUTO-TRADE KAPALI'}
@@ -125,7 +131,7 @@ export function DashboardScreen() {
                   }
                 }}
                 disabled={scanQuery.isFetching}
-                className="rounded-xl border border-[#1c2430] bg-bg-900 p-3"
+                className="rounded-xl border border-outline-500/35 bg-bg-900/60 p-3"
                 accessibilityLabel="Yenile"
               >
                 <RefreshCcw
@@ -146,7 +152,7 @@ export function DashboardScreen() {
 
             {scanQuery.isError ? (
               <View className="mt-4 rounded-2xl border border-[#2a1b22] bg-[#12090d] px-4 py-3">
-                <Text className="text-sm text-[#ff3b5c]">
+                <Text className="text-sm text-neon-red">
                   Tarama hatası. Tekrar dene.
                 </Text>
               </View>
@@ -154,9 +160,9 @@ export function DashboardScreen() {
 
             {scanQuery.isLoading && candidates.length === 0 ? (
               <View className="mt-6 gap-4">
-                <View className="h-[180px] rounded-2xl border border-[#1c2430] bg-bg-900" />
-                <View className="h-[180px] rounded-2xl border border-[#1c2430] bg-bg-900" />
-                <View className="h-[180px] rounded-2xl border border-[#1c2430] bg-bg-900" />
+                <View className="h-[180px] rounded-2xl border border-outline-500/35 bg-bg-900/60" />
+                <View className="h-[180px] rounded-2xl border border-outline-500/35 bg-bg-900/60" />
+                <View className="h-[180px] rounded-2xl border border-outline-500/35 bg-bg-900/60" />
               </View>
             ) : null}
           </View>
@@ -168,6 +174,14 @@ export function DashboardScreen() {
             targetPrice={item.target}
             stopPrice={item.stop}
             score={item.score}
+            onClose={
+              showingPositions
+                ? () => {
+                    const sym = item.symbol.trim().toUpperCase();
+                    closePositionManually({ symbol: sym });
+                  }
+                : undefined
+            }
           />
         )}
       />

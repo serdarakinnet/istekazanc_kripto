@@ -63,6 +63,10 @@ export function RegisterScreen({ navigation }: Props) {
 
   return (
     <SafeAreaView className="flex-1 bg-bg-950">
+      <View className="absolute inset-0">
+        <View className="absolute -left-24 -top-24 h-80 w-80 rounded-full bg-neon-cyan/15" />
+        <View className="absolute -bottom-24 -right-24 h-80 w-80 rounded-full bg-neon-green/10" />
+      </View>
       <KeyboardAvoidingView
         className="flex-1"
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -78,7 +82,7 @@ export function RegisterScreen({ navigation }: Props) {
           </View>
 
           <View className="mt-8 gap-4">
-            <View className="rounded-2xl border border-[#1c2430] bg-bg-900 px-4 py-3">
+            <View className="rounded-2xl border border-outline-500/35 bg-bg-900/60 px-4 py-3">
               <View className="flex-row items-center gap-3">
                 <UserIcon size={18} color="#9ca3af" />
                 <TextInput
@@ -93,7 +97,7 @@ export function RegisterScreen({ navigation }: Props) {
               </View>
             </View>
 
-            <View className="rounded-2xl border border-[#1c2430] bg-bg-900 px-4 py-3">
+            <View className="rounded-2xl border border-outline-500/35 bg-bg-900/60 px-4 py-3">
               <View className="flex-row items-center gap-3">
                 <Mail size={18} color="#9ca3af" />
                 <TextInput
@@ -110,7 +114,7 @@ export function RegisterScreen({ navigation }: Props) {
               </View>
             </View>
 
-            <View className="rounded-2xl border border-[#1c2430] bg-bg-900 px-4 py-3">
+            <View className="rounded-2xl border border-outline-500/35 bg-bg-900/60 px-4 py-3">
               <View className="flex-row items-center gap-3">
                 <Lock size={18} color="#9ca3af" />
                 <TextInput
@@ -127,7 +131,7 @@ export function RegisterScreen({ navigation }: Props) {
               </View>
             </View>
 
-            <View className="rounded-2xl border border-[#1c2430] bg-bg-900 px-4 py-3">
+            <View className="rounded-2xl border border-outline-500/35 bg-bg-900/60 px-4 py-3">
               <View className="flex-row items-center gap-3">
                 <Lock size={18} color="#9ca3af" />
                 <TextInput
@@ -147,7 +151,7 @@ export function RegisterScreen({ navigation }: Props) {
 
             {error ? (
               <View className="rounded-2xl border border-[#2a1b22] bg-[#12090d] px-4 py-3">
-                <Text className="text-sm text-[#ff3b5c]">{error}</Text>
+                <Text className="text-sm text-neon-red">{error}</Text>
               </View>
             ) : null}
           </View>
@@ -173,7 +177,7 @@ export function RegisterScreen({ navigation }: Props) {
 
             <Pressable
               onPress={() => navigation.goBack()}
-              className="mt-3 rounded-2xl border border-[#1c2430] bg-bg-900 px-4 py-4"
+              className="mt-3 rounded-2xl border border-outline-500/35 bg-bg-900/60 px-4 py-4"
             >
               <Text className="text-center text-sm font-semibold text-gray-200">
                 Giriş ekranına dön

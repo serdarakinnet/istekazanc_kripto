@@ -1,3 +1,5 @@
+import { Platform } from 'react-native';
+
 export type BinanceTicker24h = {
   symbol: string;
   lastPrice: string;
@@ -74,6 +76,15 @@ export type ScanResult = {
   }>;
 };
 
+const DEFAULT_API_BASE_URL =
+  Platform.OS === 'web'
+    ? 'http://localhost:3001'
+    : Platform.OS === 'android'
+      ? 'http://10.0.2.2:3001'
+      : 'http://localhost:3001';
+
+const API_BASE_URL = String(process.env.EXPO_PUBLIC_API_BASE_URL || DEFAULT_API_BASE_URL).replace(/\/+$/, '');
+
 const DEFAULTS: Required<
   Pick<
     ScanOptions,
@@ -110,6 +121,37 @@ const DEFAULTS: Required<
   concurrency: 5,
   timeoutMs: 12_000,
 };
+
+async function fetchBinanceTrAllowedSymbols(params: {
+  quoteAsset: string;
+  timeoutMs: number;
+}): Promise<Set<string>> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), params.timeoutMs);
+  try {
+    const url = new URL('/binance-tr/symbols', API_BASE_URL);
+    url.searchParams.set('quoteAsset', params.quoteAsset.toUpperCase());
+    const res = await fetch(url.toString(), { signal: controller.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const json = (await res.json()) as { ok?: unknown; symbols?: unknown };
+    if (json?.ok !== true || !Array.isArray(json?.symbols)) {
+      throw new Error('Invalid response');
+    }
+    const set = new Set<string>();
+    for (const item of json.symbols) {
+      if (typeof item !== 'string') continue;
+      const sym = item.trim().toUpperCase();
+      if (!sym) continue;
+      set.add(sym);
+    }
+    if (set.size === 0) throw new Error('Empty symbol list');
+    return set;
+  } catch {
+    throw new Error('Binance TR sembol listesi alınamadı.');
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 function ensureFiniteNumber(value: unknown, fieldName: string): number {
   const num = typeof value === 'number' ? value : Number(value);
@@ -756,7 +798,13 @@ export async function runDeepFibonacciEngine(
     timeoutMs: options?.timeoutMs ?? DEFAULTS.timeoutMs,
   };
 
-  const universe = filterTopPairsByQuoteVolume(tickers, merged);
+  const allowed = await fetchBinanceTrAllowedSymbols({
+    quoteAsset: merged.quoteAsset,
+    timeoutMs: merged.timeoutMs,
+  });
+  const filteredTickers = tickers.filter((t) => allowed.has(String(t.symbol).trim().toUpperCase()));
+
+  const universe = filterTopPairsByQuoteVolume(filteredTickers, merged);
   const rejected: ScanResult['rejected'] = [];
 
   const candidates = await mapWithConcurrency(

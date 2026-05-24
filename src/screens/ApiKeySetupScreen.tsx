@@ -52,6 +52,10 @@ export function ApiKeySetupScreen({ navigation }: Props) {
 
   return (
     <SafeAreaView className="flex-1 bg-bg-950">
+      <View className="absolute inset-0">
+        <View className="absolute -left-24 -top-24 h-80 w-80 rounded-full bg-neon-cyan/15" />
+        <View className="absolute -bottom-24 -right-24 h-80 w-80 rounded-full bg-neon-green/10" />
+      </View>
       <KeyboardAvoidingView
         className="flex-1"
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -70,7 +74,7 @@ export function ApiKeySetupScreen({ navigation }: Props) {
 
             <Pressable
               onPress={onLogout}
-              className="rounded-xl border border-[#1c2430] bg-bg-900 p-3"
+              className="rounded-xl border border-outline-500/35 bg-bg-900/60 p-3"
               accessibilityLabel="Çıkış Yap"
             >
               <LogOut size={18} color="#9ca3af" />
@@ -78,7 +82,7 @@ export function ApiKeySetupScreen({ navigation }: Props) {
           </View>
 
           <View className="mt-8 gap-4">
-            <View className="rounded-2xl border border-[#1c2430] bg-bg-900 px-4 py-3">
+            <View className="rounded-2xl border border-outline-500/35 bg-bg-900/60 px-4 py-3">
               <View className="flex-row items-center gap-3">
                 <KeyRound size={18} color="#9ca3af" />
                 <TextInput
@@ -93,7 +97,7 @@ export function ApiKeySetupScreen({ navigation }: Props) {
               </View>
             </View>
 
-            <View className="rounded-2xl border border-[#1c2430] bg-bg-900 px-4 py-3">
+            <View className="rounded-2xl border border-outline-500/35 bg-bg-900/60 px-4 py-3">
               <View className="flex-row items-center gap-3">
                 <KeyRound size={18} color="#9ca3af" />
                 <TextInput
@@ -122,8 +126,8 @@ export function ApiKeySetupScreen({ navigation }: Props) {
               </View>
             </View>
 
-            <View className="rounded-2xl border border-[#13241b] bg-[#07130d] px-4 py-3">
-              <Text className="text-xs leading-5 text-[#00ff88]">
+            <View className="rounded-2xl border border-neon-green/20 bg-neon-green/10 px-4 py-3">
+              <Text className="text-xs leading-5 text-neon-green">
                 Güvenlik notu: Anahtarlar SecureStore ile şifrelenir. Uygulama bu
                 verileri loglamaz.
               </Text>
@@ -131,7 +135,7 @@ export function ApiKeySetupScreen({ navigation }: Props) {
 
             {error ? (
               <View className="rounded-2xl border border-[#2a1b22] bg-[#12090d] px-4 py-3">
-                <Text className="text-sm text-[#ff3b5c]">{error}</Text>
+                <Text className="text-sm text-neon-red">{error}</Text>
               </View>
             ) : null}
           </View>

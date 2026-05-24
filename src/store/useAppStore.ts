@@ -65,6 +65,7 @@ type AppState = {
   forgetApiCredentials: () => Promise<void>;
   setWatchlist: (items: ScannedCandidate[], asOfMs: number) => void;
   setPositions: (items: ActivePosition[], asOfMs: number) => void;
+  closePositionManually: (params: { symbol: string }) => void;
   appendReports: (items: TradeReport[]) => void;
   addRecentlyClosedSymbols: (symbols: string[], atMs: number) => void;
   updateSettings: (partial: Partial<AppSettings>) => void;
@@ -77,6 +78,135 @@ const DEFAULT_SETTINGS: AppSettings = {
 
 function makeLocalId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+type PendingSync = {
+  settings?: AppSettings;
+  positions?: ActivePosition[];
+  reports?: TradeReport[];
+};
+
+const PENDING_SYNC_KEY = 'bist_pending_sync_v1';
+
+async function loadPendingSyncMap(): Promise<Record<string, PendingSync>> {
+  try {
+    const raw = await AsyncStorage.getItem(PENDING_SYNC_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return parsed as Record<string, PendingSync>;
+  } catch {
+    return {};
+  }
+}
+
+async function savePendingSyncMap(map: Record<string, PendingSync>): Promise<void> {
+  try {
+    await AsyncStorage.setItem(PENDING_SYNC_KEY, JSON.stringify(map));
+  } catch {
+  }
+}
+
+function mergeReportsById(existing: TradeReport[], incoming: TradeReport[]): TradeReport[] {
+  const byId = new Map<string, TradeReport>();
+  for (const r of existing) byId.set(r.id, r);
+  for (const r of incoming) byId.set(r.id, r);
+  return Array.from(byId.values()).sort((a, b) => b.closedAtMs - a.closedAtMs);
+}
+
+async function queuePendingSync(userId: string, patch: PendingSync): Promise<void> {
+  const id = userId.trim();
+  if (!id) return;
+  const map = await loadPendingSyncMap();
+  const current = map[id] ?? {};
+  const next: PendingSync = { ...current, ...patch };
+  if (patch.reports && patch.reports.length > 0) {
+    next.reports = mergeReportsById(current.reports ?? [], patch.reports);
+  }
+  map[id] = next;
+  await savePendingSyncMap(map);
+}
+
+async function clearPendingFields(userId: string, fields: Array<keyof PendingSync>): Promise<void> {
+  const id = userId.trim();
+  if (!id) return;
+  const map = await loadPendingSyncMap();
+  const current = map[id];
+  if (!current) return;
+  const next: PendingSync = { ...current };
+  for (const f of fields) {
+    delete (next as Record<string, unknown>)[String(f)];
+  }
+  if (!next.settings && !next.positions && (!next.reports || next.reports.length === 0)) {
+    delete map[id];
+  } else {
+    map[id] = next;
+  }
+  await savePendingSyncMap(map);
+}
+
+async function readPendingForUser(userId: string): Promise<PendingSync | null> {
+  const id = userId.trim();
+  if (!id) return null;
+  const map = await loadPendingSyncMap();
+  return map[id] ?? null;
+}
+
+async function flushPendingToDb(params: {
+  userId: string;
+  pending: PendingSync;
+  makePositionId: (symbol: string) => string;
+}): Promise<void> {
+  const userId = params.userId.trim();
+  if (!userId) return;
+
+  if (params.pending.settings) {
+    try {
+      await upsertUserSettings({
+        userId,
+        autoTradeEnabled: params.pending.settings.autoTradeEnabled,
+        minRiskReward: params.pending.settings.minRiskReward,
+      });
+      await clearPendingFields(userId, ['settings']);
+    } catch {
+    }
+  }
+
+  if (params.pending.positions) {
+    try {
+      await replaceUserPositions({
+        userId,
+        positions: params.pending.positions.map((p) => ({
+          id: params.makePositionId(p.symbol),
+          openedAtMs: p.openedAtMs,
+          payload: p,
+        })),
+      });
+      await clearPendingFields(userId, ['positions']);
+    } catch {
+    }
+  }
+
+  if (params.pending.reports && params.pending.reports.length > 0) {
+    try {
+      await appendUserReports({
+        userId,
+        reports: params.pending.reports.map((r) => ({
+          id: r.id,
+          symbol: r.symbol,
+          openedAtMs: r.openedAtMs,
+          closedAtMs: r.closedAtMs,
+          entry: r.entry,
+          exit: r.exit,
+          outcome: r.outcome,
+          pnlPct: r.pnlPct,
+          riskRewardAtEntry: r.riskRewardAtEntry,
+        })),
+      });
+      await clearPendingFields(userId, ['reports']);
+    } catch {
+    }
+  }
 }
 
 export const useAppStore = create<AppState>()(
@@ -163,33 +293,53 @@ export const useAppStore = create<AppState>()(
           }
         }
         if (toPersist.length > 0) {
-          await appendUserReports({
-            userId: user.id,
-            reports: toPersist.map((r) => ({
-              id: r.id,
-              symbol: r.symbol,
-              openedAtMs: r.openedAtMs,
-              closedAtMs: r.closedAtMs,
-              entry: r.entry,
-              exit: r.exit,
-              outcome: r.outcome,
-              pnlPct: r.pnlPct,
-              riskRewardAtEntry: r.riskRewardAtEntry,
-            })),
-          });
+          try {
+            await appendUserReports({
+              userId: user.id,
+              reports: toPersist.map((r) => ({
+                id: r.id,
+                symbol: r.symbol,
+                openedAtMs: r.openedAtMs,
+                closedAtMs: r.closedAtMs,
+                entry: r.entry,
+                exit: r.exit,
+                outcome: r.outcome,
+                pnlPct: r.pnlPct,
+                riskRewardAtEntry: r.riskRewardAtEntry,
+              })),
+            });
+          } catch {
+            await queuePendingSync(user.id, { reports: toPersist });
+          }
         }
         const mergedReports = Array.from(reportById.values()).sort(
           (a, b) => b.closedAtMs - a.closedAtMs,
         );
 
+        const pending = await readPendingForUser(user.id);
+        const effectiveSettings = pending?.settings ? pending.settings : settings;
+        const effectivePositions = pending?.positions ? pending.positions : positions;
+        const effectiveReports =
+          pending?.reports && pending.reports.length > 0
+            ? mergeReportsById(mergedReports, pending.reports)
+            : mergedReports;
+
         set({
           isSignedIn: true,
           user: { id: user.id, email: user.email, displayName: user.displayName },
-          settings,
-          positions,
-          watchlist: positions.length > 0 ? positions : get().watchlist,
-          reports: mergedReports,
+          settings: effectiveSettings,
+          positions: effectivePositions,
+          watchlist: effectivePositions.length > 0 ? effectivePositions : get().watchlist,
+          reports: effectiveReports,
         });
+
+        if (pending) {
+          void flushPendingToDb({
+            userId: user.id,
+            pending,
+            makePositionId: (symbol) => makeLocalId(`pos_${symbol}`),
+          });
+        }
       },
 
       signUpWithEmail: async ({ email, password, displayName }) => {
@@ -211,6 +361,24 @@ export const useAppStore = create<AppState>()(
       },
 
       signOut: () => {
+        const snapshot = get();
+        const userId = snapshot.user?.id;
+        if (userId) {
+          void queuePendingSync(userId, {
+            settings: snapshot.settings,
+            positions: snapshot.positions,
+            reports: snapshot.reports,
+          }).then(async () => {
+            const pending = await readPendingForUser(userId);
+            if (!pending) return;
+            await flushPendingToDb({
+              userId,
+              pending,
+              makePositionId: (symbol) => makeLocalId(`pos_${symbol}`),
+            });
+          });
+        }
+
         set({
           isSignedIn: false,
           user: null,
@@ -258,15 +426,40 @@ export const useAppStore = create<AppState>()(
 
         const userId = get().user?.id;
         if (userId) {
-          void replaceUserPositions({
-            userId,
-            positions: items.map((p) => ({
-              id: makeLocalId(`pos_${p.symbol}`),
-              openedAtMs: p.openedAtMs,
-              payload: p,
-            })),
+          void queuePendingSync(userId, { positions: items }).then(async () => {
+            const pending = await readPendingForUser(userId);
+            if (!pending?.positions) return;
+            try {
+              await replaceUserPositions({
+                userId,
+                positions: pending.positions.map((p) => ({
+                  id: makeLocalId(`pos_${p.symbol}`),
+                  openedAtMs: p.openedAtMs,
+                  payload: p,
+                })),
+              });
+              await clearPendingFields(userId, ['positions']);
+            } catch {
+            }
           });
         }
+      },
+
+      closePositionManually: ({ symbol }) => {
+        const state = get();
+        const sym = symbol.trim().toUpperCase();
+        if (!sym) return;
+        if (!state.isSignedIn) return;
+
+        const pos = state.positions.find((p) => p.symbol.trim().toUpperCase() === sym);
+        if (!pos) return;
+
+        const nowMs = Date.now();
+        state.addRecentlyClosedSymbols([sym], nowMs);
+
+        const remaining = state.positions.filter((p) => p.symbol.trim().toUpperCase() !== sym);
+        const keepScanMs = state.lastScanMs ?? nowMs;
+        state.setPositions(remaining, keepScanMs);
       },
 
       appendReports: (items) => {
@@ -282,19 +475,27 @@ export const useAppStore = create<AppState>()(
 
         const userId = get().user?.id;
         if (userId) {
-          void appendUserReports({
-            userId,
-            reports: items.map((r) => ({
-              id: r.id,
-              symbol: r.symbol,
-              openedAtMs: r.openedAtMs,
-              closedAtMs: r.closedAtMs,
-              entry: r.entry,
-              exit: r.exit,
-              outcome: r.outcome,
-              pnlPct: r.pnlPct,
-              riskRewardAtEntry: r.riskRewardAtEntry,
-            })),
+          void queuePendingSync(userId, { reports: items }).then(async () => {
+            const pending = await readPendingForUser(userId);
+            if (!pending?.reports || pending.reports.length === 0) return;
+            try {
+              await appendUserReports({
+                userId,
+                reports: pending.reports.map((r) => ({
+                  id: r.id,
+                  symbol: r.symbol,
+                  openedAtMs: r.openedAtMs,
+                  closedAtMs: r.closedAtMs,
+                  entry: r.entry,
+                  exit: r.exit,
+                  outcome: r.outcome,
+                  pnlPct: r.pnlPct,
+                  riskRewardAtEntry: r.riskRewardAtEntry,
+                })),
+              });
+              await clearPendingFields(userId, ['reports']);
+            } catch {
+            }
           });
         }
       },
@@ -321,10 +522,18 @@ export const useAppStore = create<AppState>()(
 
         const userId = get().user?.id;
         if (userId) {
-          void upsertUserSettings({
-            userId,
-            autoTradeEnabled: next.autoTradeEnabled,
-            minRiskReward: next.minRiskReward,
+          void queuePendingSync(userId, { settings: next }).then(async () => {
+            const pending = await readPendingForUser(userId);
+            if (!pending?.settings) return;
+            try {
+              await upsertUserSettings({
+                userId,
+                autoTradeEnabled: pending.settings.autoTradeEnabled,
+                minRiskReward: pending.settings.minRiskReward,
+              });
+              await clearPendingFields(userId, ['settings']);
+            } catch {
+            }
           });
         }
       },

@@ -1,6 +1,94 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { usePriceHistoryStore } from '../store/priceHistoryStore';
+import { useAppStore } from '../store/useAppStore';
+import { Platform } from 'react-native';
 
 type OnPrice = (symbol: string, price: number) => void;
+
+const DEFAULT_API_BASE_URL =
+  Platform.OS === 'web'
+    ? 'http://localhost:3001'
+    : Platform.OS === 'android'
+      ? 'http://10.0.2.2:3001'
+      : 'http://localhost:3001';
+
+const API_BASE_URL = String(process.env.EXPO_PUBLIC_API_BASE_URL || DEFAULT_API_BASE_URL).replace(/\/+$/, '');
+const PERSIST_THROTTLE_MS = 5000;
+const lastPersistedAtBySymbol: Record<string, number | undefined> = {};
+
+type PendingTickerItem = {
+  symbol: string;
+  price: number;
+  atMs: number;
+  userId: string | null;
+  source: string;
+};
+
+const PENDING_TICKER_KEY = 'bist_pending_ticker_v1';
+
+async function loadPendingTickers(): Promise<PendingTickerItem[]> {
+  try {
+    const raw = await AsyncStorage.getItem(PENDING_TICKER_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed as PendingTickerItem[];
+  } catch {
+    return [];
+  }
+}
+
+async function savePendingTickers(items: PendingTickerItem[]): Promise<void> {
+  try {
+    await AsyncStorage.setItem(PENDING_TICKER_KEY, JSON.stringify(items));
+  } catch {
+  }
+}
+
+async function enqueueTicker(item: PendingTickerItem): Promise<void> {
+  const existing = await loadPendingTickers();
+  const next = [...existing, item].slice(-1000);
+  await savePendingTickers(next);
+}
+
+async function flushPendingTickers(): Promise<void> {
+  const items = await loadPendingTickers();
+  if (items.length === 0) return;
+
+  const batch = items.slice(0, 200);
+  try {
+    const res = await fetch(`${API_BASE_URL}/binance/ticker/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: batch }),
+    });
+    if (!res.ok) return;
+    const remaining = items.slice(batch.length);
+    await savePendingTickers(remaining);
+  } catch {
+  }
+}
+
+function persistTickerPrice(symbol: string, price: number) {
+  const now = Date.now();
+  const last = lastPersistedAtBySymbol[symbol] ?? 0;
+  if (now - last < PERSIST_THROTTLE_MS) return;
+  lastPersistedAtBySymbol[symbol] = now;
+
+  const userId = useAppStore.getState().user?.id ?? null;
+  void fetch(`${API_BASE_URL}/binance/ticker`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ symbol, price, atMs: now, userId, source: 'ws' }),
+  })
+    .then((res) => {
+      if (res.ok) void flushPendingTickers();
+      else void enqueueTicker({ symbol, price, atMs: now, userId, source: 'ws' });
+    })
+    .catch(() => {
+      void enqueueTicker({ symbol, price, atMs: now, userId, source: 'ws' });
+    });
+}
 
 function buildCombinedTickerStreamUrl(symbols: string[]): string | null {
   const streams = symbols
@@ -112,6 +200,7 @@ export class BinanceWebSocketService {
       if (!this.symbols.includes(symbol)) return;
 
       usePriceHistoryStore.getState().addPrice(symbol, price);
+      persistTickerPrice(symbol, price);
       if (this.onPrice) this.onPrice(symbol, price);
     };
 

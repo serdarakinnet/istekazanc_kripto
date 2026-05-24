@@ -49,7 +49,7 @@ function Tab({
       onPress={onPress}
       className={[
         'flex-1 rounded-xl px-3 py-3',
-        active ? 'bg-bg-900 border border-[#1c2430]' : 'bg-transparent border border-transparent',
+        active ? 'bg-bg-900/60 border border-outline-500/35' : 'bg-transparent border border-transparent',
       ].join(' ')}
     >
       <Text
@@ -78,6 +78,10 @@ export function ReportsScreen() {
 
   return (
     <SafeAreaView className="flex-1 bg-bg-950">
+      <View className="absolute inset-0">
+        <View className="absolute -left-32 -top-32 h-96 w-96 rounded-full bg-neon-cyan/10" />
+        <View className="absolute -bottom-32 -right-32 h-96 w-96 rounded-full bg-neon-green/5" />
+      </View>
       <View className="px-6 pt-6">
         <View className="flex-row items-start justify-between">
           <View className="flex-1 pr-4">
@@ -88,14 +92,14 @@ export function ReportsScreen() {
           </View>
         </View>
 
-        <View className="mt-5 flex-row gap-2 rounded-2xl border border-[#1c2430] bg-bg-950 p-2">
+        <View className="mt-5 flex-row gap-2 rounded-2xl border border-outline-500/35 bg-bg-950/40 p-2">
           <Tab label="Günlük" active={range === 'day'} onPress={() => setRange('day')} />
           <Tab label="Haftalık" active={range === 'week'} onPress={() => setRange('week')} />
           <Tab label="Aylık" active={range === 'month'} onPress={() => setRange('month')} />
         </View>
 
         <View className="mt-5 flex-row gap-3">
-          <View className="flex-1 rounded-2xl border border-[#1c2430] bg-bg-900 p-4">
+          <View className="flex-1 rounded-2xl border border-outline-500/35 bg-bg-900/60 p-4">
             <Text className="text-xs text-gray-500">Win Rate</Text>
             <Text className="mt-2 text-xl font-semibold text-gray-100">
               {stats.winRate.toFixed(1)}%
@@ -104,12 +108,12 @@ export function ReportsScreen() {
               {stats.wins}/{stats.total} işlem
             </Text>
           </View>
-          <View className="flex-1 rounded-2xl border border-[#1c2430] bg-bg-900 p-4">
+          <View className="flex-1 rounded-2xl border border-outline-500/35 bg-bg-900/60 p-4">
             <Text className="text-xs text-gray-500">Toplam PnL</Text>
             <Text
               className={[
                 'mt-2 text-xl font-semibold',
-                stats.pnlPct >= 0 ? 'text-[#00ff88]' : 'text-[#ff3b5c]',
+                stats.pnlPct >= 0 ? 'text-neon-green' : 'text-neon-red',
               ].join(' ')}
             >
               {formatPct(stats.pnlPct)}
@@ -122,7 +126,7 @@ export function ReportsScreen() {
 
         <View className="mt-6 gap-3">
           {filtered.length === 0 ? (
-            <View className="rounded-2xl border border-[#1c2430] bg-bg-900 p-4">
+            <View className="rounded-2xl border border-outline-500/35 bg-bg-900/60 p-4">
               <Text className="text-sm text-gray-400">
                 Bu aralıkta kapanmış işlem yok.
               </Text>
@@ -133,7 +137,7 @@ export function ReportsScreen() {
               return (
                 <View
                   key={r.id}
-                  className="rounded-2xl border border-[#1c2430] bg-bg-900 p-4"
+                  className="rounded-2xl border border-outline-500/35 bg-bg-900/60 p-4"
                 >
                   <View className="flex-row items-start justify-between">
                     <View>
@@ -148,14 +152,14 @@ export function ReportsScreen() {
                       className={[
                         'rounded-full border px-3 py-1',
                         isWin
-                          ? 'border-[#13241b] bg-[#07130d]'
-                          : 'border-[#2a1b22] bg-[#12090d]',
+                          ? 'border-neon-green/20 bg-neon-green/10'
+                          : 'border-neon-red/20 bg-neon-red/10',
                       ].join(' ')}
                     >
                       <Text
                         className={[
                           'text-[10px] font-semibold',
-                          isWin ? 'text-[#00ff88]' : 'text-[#ff3b5c]',
+                          isWin ? 'text-neon-green' : 'text-neon-red',
                         ].join(' ')}
                       >
                         {isWin ? 'TAKE PROFIT' : 'STOP LOSS'}
@@ -181,7 +185,7 @@ export function ReportsScreen() {
                       <Text
                         className={[
                           'mt-1 text-sm font-semibold',
-                          r.pnlPct >= 0 ? 'text-[#00ff88]' : 'text-[#ff3b5c]',
+                          r.pnlPct >= 0 ? 'text-neon-green' : 'text-neon-red',
                         ].join(' ')}
                       >
                         {formatPct(r.pnlPct)}

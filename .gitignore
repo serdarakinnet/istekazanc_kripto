@@ -5,6 +5,8 @@ node_modules/
 
 # Expo
 .expo/
+.expo-home/
+.dotslash-cache/
 dist/
 web-build/
 expo-env.d.ts
@@ -42,3 +44,6 @@ yarn-error.*
 
 # Trae / IDE artifacts
 Traeresourcesappoutvsworkbenchcontribterminalcommonscriptssafe_rm_aliases.ps1*
+
+# Design exports (stitch)
+stitch_tradefeed_crypto_tracker/

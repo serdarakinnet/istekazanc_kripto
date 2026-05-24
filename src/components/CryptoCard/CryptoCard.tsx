@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { useMemo } from 'react';
-import { Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 
 import { usePriceHistoryStore } from '../../store/priceHistoryStore';
 import { PriceFlash } from './PriceFlash';
@@ -11,6 +11,7 @@ export interface CryptoCardProps {
   targetPrice: number;
   stopPrice: number;
   score: number;
+  onClose?: () => void;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -33,7 +34,7 @@ function stripTry(symbol: string): string {
   return s.endsWith('TRY') ? s.slice(0, -3) : s;
 }
 
-function CryptoCardImpl({ symbol, entryPrice, targetPrice, stopPrice, score }: CryptoCardProps) {
+function CryptoCardImpl({ symbol, entryPrice, targetPrice, stopPrice, score, onClose }: CryptoCardProps) {
   const upperSymbol = useMemo(() => symbol.toUpperCase(), [symbol]);
   const currentPrice = usePriceHistoryStore((s) => s.currentPrices[upperSymbol] ?? null);
 
@@ -46,8 +47,8 @@ function CryptoCardImpl({ symbol, entryPrice, targetPrice, stopPrice, score }: C
   const pnlUp = pnlPct >= 0;
 
   const badgeBorder =
-    score >= 85 ? 'border-[#00E676]' : score >= 70 ? 'border-[#FBBF24]' : 'border-[#2D2D44]';
-  const badgeText = score >= 85 ? 'text-[#00E676]' : score >= 70 ? 'text-[#FBBF24]' : 'text-gray-300';
+    score >= 85 ? 'border-neon-green/60' : score >= 70 ? 'border-[#FBBF24]/70' : 'border-outline-500/35';
+  const badgeText = score >= 85 ? 'text-neon-green' : score >= 70 ? 'text-[#FBBF24]' : 'text-gray-300';
 
   const progressPct = useMemo(() => {
     if (currentPrice === null || !Number.isFinite(currentPrice)) return 0;
@@ -67,14 +68,24 @@ function CryptoCardImpl({ symbol, entryPrice, targetPrice, stopPrice, score }: C
         { marginHorizontal: 16, marginVertical: 8 },
       ]}
     >
-      <View className="overflow-hidden rounded-2xl border border-[#2D2D44] bg-[#1A1A2E]">
+      <View className="overflow-hidden rounded-2xl border border-outline-500/35 bg-bg-900/60">
         <View className="p-4">
           <View className="flex-row items-center justify-between">
-            <Text className="text-[20px] font-semibold text-white">{displaySymbol}</Text>
-            <View className={['rounded-full border px-3 py-1', badgeBorder].join(' ')}>
-              <Text className={['text-xs font-semibold', badgeText].join(' ')}>
-                ⚡ {Math.round(score)}
-              </Text>
+            <Text className="text-[20px] font-semibold text-gray-100">{displaySymbol}</Text>
+            <View className="flex-row items-center gap-2">
+              {onClose ? (
+                <Pressable
+                  onPress={onClose}
+                  className="rounded-full border border-neon-red/25 bg-neon-red/10 px-3 py-1"
+                >
+                  <Text className="text-xs font-semibold text-neon-red">Kapat</Text>
+                </Pressable>
+              ) : null}
+              <View className={['rounded-full border px-3 py-1', badgeBorder].join(' ')}>
+                <Text className={['text-xs font-semibold', badgeText].join(' ')}>
+                  ⚡ {Math.round(score)}
+                </Text>
+              </View>
             </View>
           </View>
 
@@ -86,7 +97,7 @@ function CryptoCardImpl({ symbol, entryPrice, targetPrice, stopPrice, score }: C
               <Text
                 className={[
                   'mt-1 text-sm font-semibold',
-                  pnlUp ? 'text-[#00E676]' : 'text-[#FF5252]',
+                  pnlUp ? 'text-neon-green' : 'text-neon-red',
                 ].join(' ')}
               >
                 {pnlUp ? '▲' : '▼'} {formatPct(pnlPct)}
@@ -102,13 +113,13 @@ function CryptoCardImpl({ symbol, entryPrice, targetPrice, stopPrice, score }: C
               </Text>
             </View>
             <View>
-              <Text className="text-[11px] text-[#00E676]">Hedef</Text>
+              <Text className="text-[11px] text-neon-green">Hedef</Text>
               <Text className="mt-1 text-sm font-semibold text-gray-200">
                 {formatTry(targetPrice)}
               </Text>
             </View>
             <View>
-              <Text className="text-[11px] text-[#FF5252]">Stop</Text>
+              <Text className="text-[11px] text-neon-red">Stop</Text>
               <Text className="mt-1 text-sm font-semibold text-gray-200">
                 {formatTry(stopPrice)}
               </Text>
@@ -116,8 +127,8 @@ function CryptoCardImpl({ symbol, entryPrice, targetPrice, stopPrice, score }: C
           </View>
         </View>
 
-        <View className="h-1 bg-[#2D2D44]">
-          <View className="h-1 bg-[#00E676]" style={{ width: `${progressPct}%` }} />
+        <View className="h-1 bg-outline-500/20">
+          <View className="h-1 bg-outline-500/20" style={{ width: `${progressPct}%` }} />
         </View>
       </View>
     </PriceFlash>

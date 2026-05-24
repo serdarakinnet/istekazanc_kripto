@@ -32,11 +32,11 @@ const navTheme = {
   ...DefaultTheme,
   colors: {
     ...DefaultTheme.colors,
-    background: '#05070a',
-    card: '#0b0f14',
-    border: '#1c2430',
-    text: '#e5e7eb',
-    primary: '#4ce6ff',
+    background: '#0b1326',
+    card: '#171f33',
+    border: '#424656',
+    text: '#dae2fd',
+    primary: '#0066ff',
   },
 };
 
@@ -67,11 +67,21 @@ function AppTabsNavigator() {
       screenOptions={{
         headerShown: false,
         tabBarStyle: {
-          backgroundColor: '#0b0f14',
-          borderTopColor: '#1c2430',
+          position: 'absolute',
+          left: 16,
+          right: 16,
+          bottom: 12,
+          height: 64,
+          paddingBottom: 8,
+          paddingTop: 8,
+          borderTopWidth: 0,
+          borderWidth: 1,
+          borderColor: 'rgba(66, 70, 86, 0.35)',
+          borderRadius: 18,
+          backgroundColor: 'rgba(23, 31, 51, 0.85)',
         },
-        tabBarActiveTintColor: '#4ce6ff',
-        tabBarInactiveTintColor: '#9ca3af',
+        tabBarActiveTintColor: '#0066ff',
+        tabBarInactiveTintColor: '#8c90a1',
       }}
     >
       <Tabs.Screen

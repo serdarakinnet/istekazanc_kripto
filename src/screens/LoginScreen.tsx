@@ -76,6 +76,10 @@ export function LoginScreen({ navigation }: Props) {
 
   return (
     <SafeAreaView className="flex-1 bg-bg-950">
+      <View className="absolute inset-0">
+        <View className="absolute -left-24 -top-24 h-80 w-80 rounded-full bg-neon-cyan/15" />
+        <View className="absolute -bottom-24 -right-24 h-80 w-80 rounded-full bg-neon-green/10" />
+      </View>
       <KeyboardAvoidingView
         className="flex-1"
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -91,7 +95,7 @@ export function LoginScreen({ navigation }: Props) {
           </View>
 
           <View className="mt-8 gap-4">
-            <View className="rounded-2xl border border-[#1c2430] bg-bg-900 px-4 py-3">
+            <View className="rounded-2xl border border-outline-500/35 bg-bg-900/60 px-4 py-3">
               <View className="flex-row items-center gap-3">
                 <Mail size={18} color="#9ca3af" />
                 <TextInput
@@ -108,7 +112,7 @@ export function LoginScreen({ navigation }: Props) {
               </View>
             </View>
 
-            <View className="rounded-2xl border border-[#1c2430] bg-bg-900 px-4 py-3">
+            <View className="rounded-2xl border border-outline-500/35 bg-bg-900/60 px-4 py-3">
               <View className="flex-row items-center gap-3">
                 <Lock size={18} color="#9ca3af" />
                 <TextInput
@@ -135,17 +139,17 @@ export function LoginScreen({ navigation }: Props) {
               <View
                 className={[
                   'h-5 w-5 items-center justify-center rounded border',
-                  rememberMe ? 'border-[#4ce6ff] bg-[#0b1b21]' : 'border-[#1c2430] bg-bg-900',
+                  rememberMe ? 'border-neon-cyan bg-neon-cyan/10' : 'border-outline-500/35 bg-bg-900/60',
                 ].join(' ')}
               >
-                {rememberMe ? <Check size={14} color="#4ce6ff" /> : null}
+                {rememberMe ? <Check size={14} color="#0066ff" /> : null}
               </View>
               <Text className="text-sm text-gray-300">Beni hatırla</Text>
             </Pressable>
 
             {error ? (
               <View className="rounded-2xl border border-[#2a1b22] bg-[#12090d] px-4 py-3">
-                <Text className="text-sm text-[#ff3b5c]">{error}</Text>
+                <Text className="text-sm text-neon-red">{error}</Text>
               </View>
             ) : null}
           </View>
@@ -156,13 +160,13 @@ export function LoginScreen({ navigation }: Props) {
               disabled={!canSubmit}
               className={[
                 'rounded-2xl px-4 py-4',
-                canSubmit ? 'bg-neon-cyan' : 'bg-[#0f2730]',
+                canSubmit ? 'bg-neon-cyan' : 'bg-neon-cyan/20',
               ].join(' ')}
             >
               <Text
                 className={[
                   'text-center text-base font-semibold',
-                  canSubmit ? 'text-bg-950' : 'text-[#7dd3fc]',
+                  canSubmit ? 'text-bg-950' : 'text-neon-cyan',
                 ].join(' ')}
               >
                 {loading ? 'Giriş yapılıyor…' : 'Giriş Yap'}
@@ -171,7 +175,7 @@ export function LoginScreen({ navigation }: Props) {
 
             <Pressable
               onPress={() => navigation.navigate('Register')}
-              className="mt-3 flex-row items-center justify-center gap-2 rounded-2xl border border-[#1c2430] bg-bg-900 px-4 py-4"
+              className="mt-3 flex-row items-center justify-center gap-2 rounded-2xl border border-outline-500/35 bg-bg-900/60 px-4 py-4"
             >
               <UserPlus size={16} color="#9ca3af" />
               <Text className="text-center text-sm font-semibold text-gray-200">
