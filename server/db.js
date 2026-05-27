@@ -75,13 +75,11 @@ function resolveDatabaseUrl() {
       const u = new URL(raw);
       if (u.username.startsWith('<') && u.username.endsWith('>')) u.username = u.username.slice(1, -1);
       if (u.password.startsWith('<') && u.password.endsWith('>')) u.password = u.password.slice(1, -1);
-      
-      // For Supabase connections, default to sslmode=require (not verify-full)
-      // Supabase pooler uses certificates that fail strict Node.js TLS verification
+      // For Supabase connections, the pg library treats sslmode=require as verify-full
+      // and overrides the Pool's ssl object. We must remove sslmode from the URL completely
+      // and rely on the Pool's ssl: { rejectUnauthorized: false } config.
       if (u.hostname.includes('supabase.co') || u.hostname.includes('pooler.supabase.com')) {
-        if (!u.searchParams.has('sslmode')) {
-          u.searchParams.set('sslmode', 'require');
-        }
+        u.searchParams.delete('sslmode');
       }
       return u.toString();
     } catch {
@@ -111,13 +109,13 @@ function resolveDatabaseUrl() {
       }
       const finalUrl = `${scheme}://${encodeURIComponent(decodedUser)}:${encodeURIComponent(decodedPass)}@${rest}`;
       
-      // For Supabase connections, default to sslmode=require (not verify-full)
+      // For Supabase connections, the pg library treats sslmode=require as verify-full
+      // and overrides the Pool's ssl object. We must remove sslmode from the URL completely
+      // and rely on the Pool's ssl: { rejectUnauthorized: false } config.
       if (finalUrl.includes('supabase.co') || finalUrl.includes('pooler.supabase.com')) {
         const u2 = new URL(finalUrl);
-        if (!u2.searchParams.has('sslmode')) {
-          u2.searchParams.set('sslmode', 'require');
-          return u2.toString();
-        }
+        u2.searchParams.delete('sslmode');
+        return u2.toString();
       }
       return finalUrl;
     }
