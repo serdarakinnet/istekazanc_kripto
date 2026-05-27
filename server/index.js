@@ -70,9 +70,11 @@ function dbUnavailable(res) {
 
 function createApp() {
   const dbState = { ready: false, lastError: null };
+  let initPromise = null;
   const binanceTrSymbolsState = { expiresAtMs: 0, quoteAsset: null, symbols: [] };
 
   const initDb = async () => {
+    if (dbState.ready) return;
     try {
       await migrate();
       dbState.ready = true;
@@ -80,19 +82,21 @@ function createApp() {
     } catch (e) {
       dbState.ready = false;
       dbState.lastError = e instanceof Error ? e.message : String(e);
+      throw e;
     }
   };
 
   const ensureDbReady = async () => {
     if (dbState.ready) return;
-    await initDb();
-    if (!dbState.ready) {
-      setTimeout(() => {
-        void ensureDbReady();
-      }, 5000);
+    if (!initPromise) {
+      initPromise = initDb().catch(() => {
+        initPromise = null; // Reset on failure so it can be retried
+      });
     }
+    return initPromise;
   };
 
+  // Start initialization
   void ensureDbReady();
 
   const app = express();
@@ -105,8 +109,12 @@ function createApp() {
     };
   };
 
-  app.get('/health', async (_req, res) => {
+  app.get('/health', wrapAsync(async (_req, res) => {
     const connInfo = getSafeConnectionInfo();
+    if (!dbState.ready) {
+      await ensureDbReady();
+    }
+
     if (!dbState.ready) {
       return res.status(503).json({
         ok: false,
@@ -129,9 +137,9 @@ function createApp() {
         connection: connInfo,
       });
     }
-  });
+  }));
 
-  app.use((req, res, next) => {
+  app.use(wrapAsync(async (req, res, next) => {
     if (
       req.path === '/health' ||
       req.path === '/binance-tr/symbols' ||
@@ -142,11 +150,17 @@ function createApp() {
     ) {
       return next();
     }
+
+    // In serverless environments, we must wait for DB to be ready
+    if (!dbState.ready) {
+      await ensureDbReady();
+    }
+
     if (!dbState.ready) {
       return errorResponse(res, 503, 'Veritabanına bağlanılamadı.');
     }
     return next();
-  });
+  }));
 
   app.get('/binance-tr/symbols', async (req, res) => {
     const quoteAssetRaw = typeof req.query?.quoteAsset === 'string' ? req.query.quoteAsset : '';

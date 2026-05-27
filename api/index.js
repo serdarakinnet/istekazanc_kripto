@@ -2,12 +2,12 @@ const { createApp } = require('../server/index');
 
 let cachedApp = null;
 
-module.exports = (req, res) => {
-  if (!cachedApp) {
-    cachedApp = createApp();
-  }
-  const app = cachedApp;
+module.exports = async (req, res) => {
   try {
+    if (!cachedApp) {
+      cachedApp = createApp();
+    }
+    const app = cachedApp;
     if (typeof req.url === 'string' && req.url.startsWith('/api/')) {
       req.url = req.url.slice('/api'.length) || '/';
     } else if (typeof req.url === 'string' && req.url === '/api') {
