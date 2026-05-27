@@ -64,10 +64,6 @@ function errorResponse(res, status, message) {
   return res.status(status).json({ error: message });
 }
 
-function dbUnavailable(res) {
-  return errorResponse(res, 503, 'Veritabanına bağlanılamadı.');
-}
-
 async function main() {
   const dbState = { ready: false, lastError: null };
   const binanceTrSymbolsState = { expiresAtMs: 0, quoteAsset: null, symbols: [] };
@@ -377,7 +373,7 @@ async function main() {
       if (msg.toLowerCase().includes('duplicate') || msg.toLowerCase().includes('unique')) {
         return errorResponse(res, 409, 'Bu e-mail zaten kayıtlı.');
       }
-      return dbUnavailable(res);
+      return errorResponse(res, 500, 'Kayıt başarısız.');
     }
   });
 
@@ -386,26 +382,21 @@ async function main() {
     const password = String(req.body?.password || '').trim();
     if (!isValidEmail(email) || password.length === 0) return errorResponse(res, 400, 'E-mail ve şifre zorunludur.');
 
-    let result;
-    try {
-      result = await pool.query(
-        `
-          SELECT
-            id::text as id,
-            email::text as email,
-            display_name as "displayName",
-            password_hash as "passwordHash",
-            password_salt as "passwordSalt",
-            created_at_ms as "createdAtMs"
-          FROM users
-          WHERE email = $1
-          LIMIT 1
-        `,
-        [email],
-      );
-    } catch {
-      return dbUnavailable(res);
-    }
+    const result = await pool.query(
+      `
+        SELECT
+          id::text as id,
+          email::text as email,
+          display_name as "displayName",
+          password_hash as "passwordHash",
+          password_salt as "passwordSalt",
+          created_at_ms as "createdAtMs"
+        FROM users
+        WHERE email = $1
+        LIMIT 1
+      `,
+      [email],
+    );
 
     const user = result.rows[0];
     if (!user) return errorResponse(res, 401, 'E-mail veya şifre hatalı.');
@@ -425,24 +416,19 @@ async function main() {
     const userId = String(req.params.userId || '').trim();
     if (!userId) return res.json(null);
 
-    let result;
-    try {
-      result = await pool.query(
-        `
-          SELECT
-            user_id::text as "userId",
-            auto_trade_enabled as "autoTradeEnabled",
-            min_risk_reward as "minRiskReward",
-            updated_at_ms as "updatedAtMs"
-          FROM user_settings
-          WHERE user_id = $1::uuid
-          LIMIT 1
-        `,
-        [userId],
-      );
-    } catch {
-      return dbUnavailable(res);
-    }
+    const result = await pool.query(
+      `
+        SELECT
+          user_id::text as "userId",
+          auto_trade_enabled as "autoTradeEnabled",
+          min_risk_reward as "minRiskReward",
+          updated_at_ms as "updatedAtMs"
+        FROM user_settings
+        WHERE user_id = $1::uuid
+        LIMIT 1
+      `,
+      [userId],
+    );
     const row = result.rows[0];
     if (!row) return res.json(null);
     res.json({
@@ -462,23 +448,18 @@ async function main() {
     if (!Number.isFinite(minRiskReward) || minRiskReward <= 0) return errorResponse(res, 400, 'Min risk/reward hatalı.');
 
     const updatedAtMs = nowMs();
-    let result;
-    try {
-      result = await pool.query(
-        `
-          INSERT INTO user_settings (user_id, auto_trade_enabled, min_risk_reward, updated_at_ms)
-          VALUES ($1::uuid, $2, $3, $4)
-          ON CONFLICT (user_id) DO UPDATE SET
-            auto_trade_enabled = EXCLUDED.auto_trade_enabled,
-            min_risk_reward = EXCLUDED.min_risk_reward,
-            updated_at_ms = EXCLUDED.updated_at_ms
-          RETURNING user_id::text as "userId", auto_trade_enabled as "autoTradeEnabled", min_risk_reward as "minRiskReward", updated_at_ms as "updatedAtMs"
-        `,
-        [userId, autoTradeEnabled, minRiskReward, updatedAtMs],
-      );
-    } catch {
-      return dbUnavailable(res);
-    }
+    const result = await pool.query(
+      `
+        INSERT INTO user_settings (user_id, auto_trade_enabled, min_risk_reward, updated_at_ms)
+        VALUES ($1::uuid, $2, $3, $4)
+        ON CONFLICT (user_id) DO UPDATE SET
+          auto_trade_enabled = EXCLUDED.auto_trade_enabled,
+          min_risk_reward = EXCLUDED.min_risk_reward,
+          updated_at_ms = EXCLUDED.updated_at_ms
+        RETURNING user_id::text as "userId", auto_trade_enabled as "autoTradeEnabled", min_risk_reward as "minRiskReward", updated_at_ms as "updatedAtMs"
+      `,
+      [userId, autoTradeEnabled, minRiskReward, updatedAtMs],
+    );
 
     const row = result.rows[0];
     res.json({
@@ -493,20 +474,15 @@ async function main() {
     const userId = String(req.params.userId || '').trim();
     if (!userId) return res.json(null);
 
-    let result;
-    try {
-      result = await pool.query(
-        `
-          SELECT api_key_enc as "apiKeyEnc", api_secret_enc as "apiSecretEnc", updated_at_ms as "updatedAtMs"
-          FROM user_api_credentials
-          WHERE user_id = $1::uuid
-          LIMIT 1
-        `,
-        [userId],
-      );
-    } catch {
-      return dbUnavailable(res);
-    }
+    const result = await pool.query(
+      `
+        SELECT api_key_enc as "apiKeyEnc", api_secret_enc as "apiSecretEnc", updated_at_ms as "updatedAtMs"
+        FROM user_api_credentials
+        WHERE user_id = $1::uuid
+        LIMIT 1
+      `,
+      [userId],
+    );
     const row = result.rows[0];
     if (!row) return res.json(null);
     try {
@@ -529,47 +505,38 @@ async function main() {
     const updatedAtMs = nowMs();
     const apiKeyEnc = encryptText(apiKey);
     const apiSecretEnc = encryptText(apiSecret);
-    try {
-      await pool.query(
-        `
-          INSERT INTO user_api_credentials (user_id, api_key_enc, api_secret_enc, updated_at_ms)
-          VALUES ($1::uuid, $2::jsonb, $3::jsonb, $4)
-          ON CONFLICT (user_id) DO UPDATE SET
-            api_key_enc = EXCLUDED.api_key_enc,
-            api_secret_enc = EXCLUDED.api_secret_enc,
-            updated_at_ms = EXCLUDED.updated_at_ms
-        `,
-        [userId, JSON.stringify(apiKeyEnc), JSON.stringify(apiSecretEnc), updatedAtMs],
-      );
-      return res.json({ ok: true, updatedAtMs });
-    } catch {
-      return dbUnavailable(res);
-    }
+    await pool.query(
+      `
+        INSERT INTO user_api_credentials (user_id, api_key_enc, api_secret_enc, updated_at_ms)
+        VALUES ($1::uuid, $2::jsonb, $3::jsonb, $4)
+        ON CONFLICT (user_id) DO UPDATE SET
+          api_key_enc = EXCLUDED.api_key_enc,
+          api_secret_enc = EXCLUDED.api_secret_enc,
+          updated_at_ms = EXCLUDED.updated_at_ms
+      `,
+      [userId, JSON.stringify(apiKeyEnc), JSON.stringify(apiSecretEnc), updatedAtMs],
+    );
+    return res.json({ ok: true, updatedAtMs });
   });
 
   app.get('/users/:userId/positions', async (req, res) => {
     const userId = String(req.params.userId || '').trim();
     if (!userId) return res.json([]);
 
-    let result;
-    try {
-      result = await pool.query(
-        `
-          SELECT
-            id,
-            user_id::text as "userId",
-            opened_at_ms as "openedAtMs",
-            payload_json as "payloadJson",
-            updated_at_ms as "updatedAtMs"
-          FROM positions
-          WHERE user_id = $1::uuid
-          ORDER BY opened_at_ms DESC
-        `,
-        [userId],
-      );
-    } catch {
-      return dbUnavailable(res);
-    }
+    const result = await pool.query(
+      `
+        SELECT
+          id,
+          user_id::text as "userId",
+          opened_at_ms as "openedAtMs",
+          payload_json as "payloadJson",
+          updated_at_ms as "updatedAtMs"
+        FROM positions
+        WHERE user_id = $1::uuid
+        ORDER BY opened_at_ms DESC
+      `,
+      [userId],
+    );
 
     res.json(
       result.rows.map((r) => ({
@@ -589,12 +556,7 @@ async function main() {
     const positions = Array.isArray(req.body?.positions) ? req.body.positions : [];
     const updatedAtMs = nowMs();
 
-    let client;
-    try {
-      client = await pool.connect();
-    } catch {
-      return dbUnavailable(res);
-    }
+    const client = await pool.connect();
     try {
       await client.query('BEGIN');
       await client.query('DELETE FROM positions WHERE user_id = $1::uuid', [userId]);
@@ -630,35 +592,30 @@ async function main() {
     const userId = String(req.params.userId || '').trim();
     if (!userId) return res.json([]);
 
-    let result;
-    try {
-      result = await pool.query(
-        `
-          SELECT *
-          FROM (
-            SELECT DISTINCT ON (symbol, opened_at_ms, outcome)
-              id,
-              user_id::text as "userId",
-              symbol,
-              opened_at_ms as "openedAtMs",
-              closed_at_ms as "closedAtMs",
-              entry,
-              exit,
-              outcome,
-              pnl_pct as "pnlPct",
-              risk_reward_at_entry as "riskRewardAtEntry",
-              created_at_ms as "createdAtMs"
-            FROM trade_reports
-            WHERE user_id = $1::uuid
-            ORDER BY symbol, opened_at_ms, outcome, closed_at_ms DESC
-          ) t
-          ORDER BY t."closedAtMs" DESC
-        `,
-        [userId],
-      );
-    } catch {
-      return dbUnavailable(res);
-    }
+    const result = await pool.query(
+      `
+        SELECT *
+        FROM (
+          SELECT DISTINCT ON (symbol, opened_at_ms, outcome)
+            id,
+            user_id::text as "userId",
+            symbol,
+            opened_at_ms as "openedAtMs",
+            closed_at_ms as "closedAtMs",
+            entry,
+            exit,
+            outcome,
+            pnl_pct as "pnlPct",
+            risk_reward_at_entry as "riskRewardAtEntry",
+            created_at_ms as "createdAtMs"
+          FROM trade_reports
+          WHERE user_id = $1::uuid
+          ORDER BY symbol, opened_at_ms, outcome, closed_at_ms DESC
+        ) t
+        ORDER BY t."closedAtMs" DESC
+      `,
+      [userId],
+    );
 
     res.json(
       result.rows.map((r) => ({
@@ -685,12 +642,7 @@ async function main() {
     if (reports.length === 0) return res.json({ ok: true });
 
     const createdAtMs = nowMs();
-    let client;
-    try {
-      client = await pool.connect();
-    } catch {
-      return dbUnavailable(res);
-    }
+    const client = await pool.connect();
     try {
       await client.query('BEGIN');
       for (const r of reports) {
@@ -775,8 +727,9 @@ async function main() {
         [symbol, price, eventAtMs, userId, source],
       );
       res.json({ ok: true });
-    } catch {
-      return dbUnavailable(res);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return errorResponse(res, 500, msg);
     }
   });
 
@@ -784,12 +737,7 @@ async function main() {
     const items = Array.isArray(req.body?.items) ? req.body.items : [];
     if (items.length === 0) return res.json({ ok: true, inserted: 0 });
 
-    let client;
-    try {
-      client = await pool.connect();
-    } catch {
-      return dbUnavailable(res);
-    }
+    const client = await pool.connect();
     let inserted = 0;
     try {
       await client.query('BEGIN');

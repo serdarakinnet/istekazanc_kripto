@@ -1,13 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const dns = require('dns');
 const { Pool } = require('pg');
-
-try {
-  dns.setServers(['1.1.1.1', '8.8.8.8']);
-} catch {
-}
 
 function redactConnString(input) {
   try {
@@ -16,23 +10,6 @@ function redactConnString(input) {
     return u.toString();
   } catch {
     return String(input || '');
-  }
-}
-
-function describeConnString(input) {
-  const raw = String(input || '').trim();
-  if (!raw) return '(missing)';
-  const normalized = normalizeConnString(raw);
-  try {
-    const u = new URL(normalized);
-    const host = u.hostname || '(host)';
-    const port = u.port ? `:${u.port}` : '';
-    const user = u.username ? decodeURIComponent(u.username) : '(user)';
-    const pwLen = u.password ? decodeURIComponent(u.password).length : 0;
-    const db = u.pathname || '';
-    return `${u.protocol}//${user}:***@${host}${port}${db} (pwLen=${pwLen})`;
-  } catch {
-    return '(invalid)';
   }
 }
 
@@ -185,74 +162,21 @@ function resolveTargetDatabaseUrl() {
   return trimmed;
 }
 
-function resolveSsl(connectionString, hostnameHint) {
-  const raw = String(connectionString || '');
-  const lowered = raw.toLowerCase();
-  const hint = String(hostnameHint || '').toLowerCase();
-  let mode = '';
-  try {
-    const u = new URL(raw);
-    mode = String(u.searchParams.get('sslmode') || '').trim().toLowerCase();
-  } catch {
+function resolveSsl(connectionString) {
+  const sslmode = String(process.env.PGSSLMODE || '').trim().toLowerCase();
+  if (sslmode === 'require' || sslmode === 'verify-ca' || sslmode === 'verify-full') {
+    return { rejectUnauthorized: sslmode === 'verify-full' };
   }
-
-  if (mode === 'verify-full') return { rejectUnauthorized: true };
-  if (mode === 'require' || mode === 'verify-ca' || mode === 'prefer') return { rejectUnauthorized: false };
+  const lowered = String(connectionString || '').toLowerCase();
+  if (lowered.includes('supabase.co')) return { rejectUnauthorized: false };
   if (lowered.includes('sslmode=require')) return { rejectUnauthorized: false };
-  if (lowered.includes('supabase.co') || lowered.includes('supabase.com')) return { rejectUnauthorized: false };
-  if (hint.includes('supabase.co') || hint.includes('supabase.com')) return { rejectUnauthorized: false };
   return undefined;
 }
 
-function isIpv4(host) {
-  return /^(\d{1,3}\.){3}\d{1,3}$/.test(String(host || '').trim());
-}
-
-async function resolveHostIpv4(hostname) {
-  const host = String(hostname || '').trim();
-  if (!host) throw new Error('Host missing');
-  if (isIpv4(host)) return host;
-
-  const timeoutMs = 2500;
-  const res = await Promise.race([
-    dns.promises.resolve4(host),
-    new Promise((_, reject) => setTimeout(() => reject(new Error('DNS timeout')), timeoutMs)),
-  ]);
-  const list = Array.isArray(res) ? res : [];
-  const ip = list.find((x) => typeof x === 'string' && isIpv4(x));
-  if (!ip) throw new Error('No A record');
-  return ip;
-}
-
-async function createPool(connectionString) {
-  const normalized = normalizeConnString(connectionString);
-  const u = new URL(normalized);
-  const originalHost = u.hostname;
-  const port = u.port ? Number(u.port) : 5432;
-  const database = String(u.pathname || '').replace(/^\//, '') || 'postgres';
-  const user = u.username ? decodeURIComponent(u.username) : '';
-  const password = u.password ? decodeURIComponent(u.password) : '';
-
-  let host = originalHost;
-  try {
-    host = await resolveHostIpv4(originalHost);
-  } catch {
-    host = originalHost;
-  }
-
-  const baseSsl = resolveSsl(normalized, originalHost);
-  let ssl = baseSsl;
-  if (ssl && typeof ssl === 'object' && isIpv4(host) && originalHost && originalHost !== host) {
-    ssl = { ...ssl, servername: originalHost };
-  }
-
+function createPool(connectionString) {
   return new Pool({
-    host,
-    port,
-    database,
-    user,
-    password,
-    ssl,
+    connectionString,
+    ssl: resolveSsl(connectionString),
     max: 3,
   });
 }
@@ -462,8 +386,8 @@ async function main() {
   const sourceUrl = resolveSourceDatabaseUrl();
   const targetUrl = resolveTargetDatabaseUrl();
 
-  const sourcePool = await createPool(sourceUrl);
-  const targetPool = await createPool(targetUrl);
+  const sourcePool = createPool(sourceUrl);
+  const targetPool = createPool(targetUrl);
 
   try {
     await migrateTargetSchema(targetPool);
@@ -506,11 +430,7 @@ main()
   .catch((e) => {
     const msg = e instanceof Error ? e.message : String(e);
     process.stderr.write(`FAIL: ${msg}\n`);
-    process.stderr.write(
-      `SOURCE_DATABASE_URL: ${describeConnString(process.env.SOURCE_DATABASE_URL || process.env.DATABASE_URL || '')}\n`,
-    );
-    process.stderr.write(
-      `TARGET_DATABASE_URL: ${describeConnString(process.env.TARGET_DATABASE_URL || process.env.SUPABASE_DATABASE_URL || '')}\n`,
-    );
+    process.stderr.write(`SOURCE_DATABASE_URL: ${redactConnString(process.env.SOURCE_DATABASE_URL || process.env.DATABASE_URL || '(auto)')}\n`);
+    process.stderr.write(`TARGET_DATABASE_URL: ${redactConnString(process.env.TARGET_DATABASE_URL || process.env.SUPABASE_DATABASE_URL || '(missing)')}\n`);
     process.exitCode = 1;
   });

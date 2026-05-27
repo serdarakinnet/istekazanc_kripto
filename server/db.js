@@ -123,18 +123,13 @@ const pool = new Pool({
   ssl: (() => {
     const url = resolveDatabaseUrl();
     const sslmode = String(process.env.PGSSLMODE || '').trim().toLowerCase();
-    if (sslmode === 'verify-full') return { rejectUnauthorized: true };
-    if (sslmode === 'require' || sslmode === 'verify-ca' || sslmode === 'prefer') {
-      return { rejectUnauthorized: false };
+    if (sslmode === 'require' || sslmode === 'verify-ca' || sslmode === 'verify-full') {
+      return { rejectUnauthorized: sslmode === 'verify-full' };
     }
-
-    if (url.includes('supabase.co') || url.includes('supabase.com')) return { rejectUnauthorized: false };
+    if (url.includes('supabase.co')) return { rejectUnauthorized: false };
     if (url.toLowerCase().includes('sslmode=require')) return { rejectUnauthorized: false };
     return undefined;
   })(),
-  connectionTimeoutMillis: Number.isFinite(Number(process.env.PGCONNECT_TIMEOUT_MS))
-    ? Math.max(500, Math.min(20_000, Number(process.env.PGCONNECT_TIMEOUT_MS)))
-    : 8000,
   max: 10,
 });
 
