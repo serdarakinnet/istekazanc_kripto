@@ -614,6 +614,16 @@ export const useAppStore = create<AppState>()(
           ]);
           set({ reports: merged });
         } catch {
+          try {
+            const pending = await readPendingForUser(userId);
+            const merged = normalizeAndDedupeReports([
+              ...(pending?.reports ?? []),
+              ...get().reports,
+            ]);
+            set({ reports: merged });
+          } catch {
+            // Ignore if pending read also fails
+          }
         }
       },
 

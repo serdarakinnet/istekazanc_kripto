@@ -831,7 +831,7 @@ function scoreCandidate(params: {
 
   const stop = Number((ema21 * 0.97).toFixed(8));
   const entry = Number(lastClose.toFixed(8));
-  const rrTarget = 1.8;
+  const rrTarget = params.minRiskReward;
   const riskRaw = (entry - stop) / entry;
 
   if (entrySignal && (!Number.isFinite(riskRaw) || riskRaw <= 0)) {
