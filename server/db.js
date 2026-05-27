@@ -76,10 +76,11 @@ function resolveDatabaseUrl() {
       if (u.username.startsWith('<') && u.username.endsWith('>')) u.username = u.username.slice(1, -1);
       if (u.password.startsWith('<') && u.password.endsWith('>')) u.password = u.password.slice(1, -1);
       
-      // Fix SSL Security Warning
+      // For Supabase connections, default to sslmode=require (not verify-full)
+      // Supabase pooler uses certificates that fail strict Node.js TLS verification
       if (u.hostname.includes('supabase.co') || u.hostname.includes('pooler.supabase.com')) {
         if (!u.searchParams.has('sslmode')) {
-          u.searchParams.set('sslmode', 'verify-full');
+          u.searchParams.set('sslmode', 'require');
         }
       }
       return u.toString();
@@ -110,11 +111,11 @@ function resolveDatabaseUrl() {
       }
       const finalUrl = `${scheme}://${encodeURIComponent(decodedUser)}:${encodeURIComponent(decodedPass)}@${rest}`;
       
-      // Fix SSL Security Warning
+      // For Supabase connections, default to sslmode=require (not verify-full)
       if (finalUrl.includes('supabase.co') || finalUrl.includes('pooler.supabase.com')) {
         const u2 = new URL(finalUrl);
         if (!u2.searchParams.has('sslmode')) {
-          u2.searchParams.set('sslmode', 'verify-full');
+          u2.searchParams.set('sslmode', 'require');
           return u2.toString();
         }
       }
@@ -145,11 +146,15 @@ const pool = new Pool({
     } catch {
       return undefined;
     }
+    // Supabase pooler uses certificates that fail strict Node.js TLS verification.
+    // Always use rejectUnauthorized: false for Supabase connections (SSL is still enabled).
+    if (u.hostname.includes('supabase.co') || u.hostname.includes('pooler.supabase.com')) {
+      return { rejectUnauthorized: false };
+    }
     const sslmode = u.searchParams.get('sslmode') || String(process.env.PGSSLMODE || '').trim().toLowerCase();
     if (sslmode === 'require' || sslmode === 'verify-ca' || sslmode === 'verify-full') {
       return { rejectUnauthorized: sslmode === 'verify-full' };
     }
-    if (u.hostname.includes('supabase.co') || u.hostname.includes('pooler.supabase.com')) return { rejectUnauthorized: false };
     return undefined;
   })(),
   max: 10,
