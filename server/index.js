@@ -99,6 +99,12 @@ function createApp() {
   app.use(cors({ origin: true, credentials: false }));
   app.use(express.json({ limit: '1mb' }));
 
+  const wrapAsync = (handler) => {
+    return (req, res, next) => {
+      Promise.resolve(handler(req, res, next)).catch(next);
+    };
+  };
+
   app.get('/health', async (_req, res) => {
     if (!dbState.ready) {
       return res.status(503).json({ ok: false, dbReady: false, error: 'Veritabanına bağlanılamadı.', details: dbState.lastError });
@@ -339,7 +345,7 @@ function createApp() {
     }
   });
 
-  app.post('/auth/register', async (req, res) => {
+  app.post('/auth/register', wrapAsync(async (req, res) => {
     const email = normalizeEmail(req.body?.email);
     const password = String(req.body?.password || '').trim();
     const displayName = typeof req.body?.displayName === 'string' ? req.body.displayName.trim() : null;
@@ -377,11 +383,11 @@ function createApp() {
       if (msg.toLowerCase().includes('duplicate') || msg.toLowerCase().includes('unique')) {
         return errorResponse(res, 409, 'Bu e-mail zaten kayıtlı.');
       }
-      return errorResponse(res, 500, 'Kayıt başarısız.');
+      return dbUnavailable(res);
     }
-  });
+  }));
 
-  app.post('/auth/login', async (req, res) => {
+  app.post('/auth/login', wrapAsync(async (req, res) => {
     const email = normalizeEmail(req.body?.email);
     const password = String(req.body?.password || '').trim();
     if (!isValidEmail(email) || password.length === 0) return errorResponse(res, 400, 'E-mail ve şifre zorunludur.');
@@ -414,9 +420,9 @@ function createApp() {
       displayName: user.displayName,
       createdAtMs: Number(user.createdAtMs),
     });
-  });
+  }));
 
-  app.get('/users/:userId/settings', async (req, res) => {
+  app.get('/users/:userId/settings', wrapAsync(async (req, res) => {
     const userId = String(req.params.userId || '').trim();
     if (!userId) return res.json(null);
 
@@ -441,9 +447,9 @@ function createApp() {
       minRiskReward: Number(row.minRiskReward),
       updatedAtMs: Number(row.updatedAtMs),
     });
-  });
+  }));
 
-  app.put('/users/:userId/settings', async (req, res) => {
+  app.put('/users/:userId/settings', wrapAsync(async (req, res) => {
     const userId = String(req.params.userId || '').trim();
     if (!userId) return errorResponse(res, 400, 'Kullanıcı bulunamadı.');
 
@@ -472,9 +478,9 @@ function createApp() {
       minRiskReward: Number(row.minRiskReward),
       updatedAtMs: Number(row.updatedAtMs),
     });
-  });
+  }));
 
-  app.get('/users/:userId/api-credentials', async (req, res) => {
+  app.get('/users/:userId/api-credentials', wrapAsync(async (req, res) => {
     const userId = String(req.params.userId || '').trim();
     if (!userId) return res.json(null);
 
@@ -496,9 +502,9 @@ function createApp() {
     } catch (e) {
       return errorResponse(res, 500, e instanceof Error ? e.message : String(e));
     }
-  });
+  }));
 
-  app.put('/users/:userId/api-credentials', async (req, res) => {
+  app.put('/users/:userId/api-credentials', wrapAsync(async (req, res) => {
     const userId = String(req.params.userId || '').trim();
     if (!userId) return errorResponse(res, 400, 'Kullanıcı bulunamadı.');
 
@@ -521,9 +527,9 @@ function createApp() {
       [userId, JSON.stringify(apiKeyEnc), JSON.stringify(apiSecretEnc), updatedAtMs],
     );
     return res.json({ ok: true, updatedAtMs });
-  });
+  }));
 
-  app.get('/users/:userId/positions', async (req, res) => {
+  app.get('/users/:userId/positions', wrapAsync(async (req, res) => {
     const userId = String(req.params.userId || '').trim();
     if (!userId) return res.json([]);
 
@@ -551,9 +557,9 @@ function createApp() {
         updatedAtMs: Number(r.updatedAtMs),
       })),
     );
-  });
+  }));
 
-  app.put('/users/:userId/positions', async (req, res) => {
+  app.put('/users/:userId/positions', wrapAsync(async (req, res) => {
     const userId = String(req.params.userId || '').trim();
     if (!userId) return errorResponse(res, 400, 'Kullanıcı bulunamadı.');
 
@@ -590,9 +596,9 @@ function createApp() {
     } finally {
       client.release();
     }
-  });
+  }));
 
-  app.get('/users/:userId/reports', async (req, res) => {
+  app.get('/users/:userId/reports', wrapAsync(async (req, res) => {
     const userId = String(req.params.userId || '').trim();
     if (!userId) return res.json([]);
 
@@ -636,9 +642,9 @@ function createApp() {
         createdAtMs: Number(r.createdAtMs),
       })),
     );
-  });
+  }));
 
-  app.post('/users/:userId/reports', async (req, res) => {
+  app.post('/users/:userId/reports', wrapAsync(async (req, res) => {
     const userId = String(req.params.userId || '').trim();
     if (!userId) return errorResponse(res, 400, 'Kullanıcı bulunamadı.');
 
@@ -708,9 +714,9 @@ function createApp() {
     } finally {
       client.release();
     }
-  });
+  }));
 
-  app.post('/binance/ticker', async (req, res) => {
+  app.post('/binance/ticker', wrapAsync(async (req, res) => {
     const symbol = String(req.body?.symbol || '').trim().toUpperCase();
     const price = Number(req.body?.price);
     const eventAtMs = Number.isFinite(Number(req.body?.atMs)) ? Number(req.body.atMs) : nowMs();
@@ -732,12 +738,11 @@ function createApp() {
       );
       res.json({ ok: true });
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      return errorResponse(res, 500, msg);
+      return dbUnavailable(res);
     }
-  });
+  }));
 
-  app.post('/binance/ticker/batch', async (req, res) => {
+  app.post('/binance/ticker/batch', wrapAsync(async (req, res) => {
     const items = Array.isArray(req.body?.items) ? req.body.items : [];
     if (items.length === 0) return res.json({ ok: true, inserted: 0 });
 
@@ -772,10 +777,24 @@ function createApp() {
         await client.query('ROLLBACK');
       } catch {
       }
-      return errorResponse(res, 500, 'Kayıt başarısız.');
+      return dbUnavailable(res);
     } finally {
       client.release();
     }
+  }));
+
+  app.use((err, _req, res, _next) => {
+    const code = err && typeof err === 'object' ? err.code : null;
+    const message = err instanceof Error ? err.message : String(err || '');
+    if (code === 'ETIMEDOUT' || code === 'ECONNREFUSED' || code === 'ENOTFOUND') return dbUnavailable(res);
+    if (typeof message === 'string' && message.toLowerCase().includes('timeout')) return dbUnavailable(res);
+    if (typeof message === 'string' && message.toLowerCase().includes('self-signed')) return dbUnavailable(res);
+    try {
+      const msg = err instanceof Error ? err.stack || err.message : String(err);
+      process.stderr.write(`${msg}\n`);
+    } catch {
+    }
+    return errorResponse(res, 500, 'Sunucu hatası.');
   });
 
   return app;
