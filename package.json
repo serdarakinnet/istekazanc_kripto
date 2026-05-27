@@ -41,6 +41,7 @@
   },
   "scripts": {
     "api": "node server/index.js",
+    "build": "expo export --platform web --output-dir dist",
     "start": "set EXPO_HOME=%cd%\\.expo-home&& set DOTSLASH_CACHE=%cd%\\.dotslash-cache&& set EXPO_NO_TELEMETRY=1&& expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
