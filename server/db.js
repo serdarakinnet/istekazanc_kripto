@@ -127,10 +127,28 @@ const pool = new Pool({
       return { rejectUnauthorized: sslmode === 'verify-full' };
     }
     if (url.includes('supabase.co')) return { rejectUnauthorized: false };
+    if (url.includes('pooler.supabase.com')) return { rejectUnauthorized: false };
     if (url.toLowerCase().includes('sslmode=require')) return { rejectUnauthorized: false };
     return undefined;
   })(),
   max: 10,
+  connectionTimeoutMillis: 10000,
+  idleTimeoutMillis: 30000,
 });
 
-module.exports = { pool };
+function getSafeConnectionInfo() {
+  try {
+    const url = new URL(resolveDatabaseUrl());
+    return {
+      host: url.hostname,
+      port: url.port,
+      database: url.pathname.slice(1),
+      user: url.username,
+      protocol: url.protocol,
+    };
+  } catch {
+    return { error: 'Could not parse connection string' };
+  }
+}
+
+module.exports = { pool, getSafeConnectionInfo };

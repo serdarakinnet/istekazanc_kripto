@@ -1,8 +1,12 @@
 const { createApp } = require('../server/index');
 
-const app = createApp();
+let cachedApp = null;
 
 module.exports = (req, res) => {
+  if (!cachedApp) {
+    cachedApp = createApp();
+  }
+  const app = cachedApp;
   try {
     if (typeof req.url === 'string' && req.url.startsWith('/api/')) {
       req.url = req.url.slice('/api'.length) || '/';

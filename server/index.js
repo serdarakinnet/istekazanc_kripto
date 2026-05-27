@@ -3,7 +3,7 @@ const crypto = require('crypto');
 const cors = require('cors');
 const express = require('express');
 
-const { pool } = require('./db');
+const { pool, getSafeConnectionInfo } = require('./db');
 const { migrate } = require('./migrate');
 
 function nowMs() {
@@ -106,17 +106,28 @@ function createApp() {
   };
 
   app.get('/health', async (_req, res) => {
+    const connInfo = getSafeConnectionInfo();
     if (!dbState.ready) {
-      return res.status(503).json({ ok: false, dbReady: false, error: 'Veritabanına bağlanılamadı.', details: dbState.lastError });
+      return res.status(503).json({
+        ok: false,
+        dbReady: false,
+        error: 'Veritabanına bağlanılamadı.',
+        details: dbState.lastError,
+        connection: connInfo,
+      });
     }
 
     try {
       await pool.query('SELECT 1');
-      return res.json({ ok: true, dbReady: true });
+      return res.json({ ok: true, dbReady: true, connection: connInfo });
     } catch (e) {
-      return res
-        .status(500)
-        .json({ ok: false, dbReady: false, error: 'Veritabanına bağlanılamadı.', details: e instanceof Error ? e.message : String(e) });
+      return res.status(500).json({
+        ok: false,
+        dbReady: false,
+        error: 'Veritabanına bağlanılamadı.',
+        details: e instanceof Error ? e.message : String(e),
+        connection: connInfo,
+      });
     }
   });
 
