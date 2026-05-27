@@ -64,7 +64,9 @@ function resolveApiBaseUrl(): string {
     const g = globalThis as unknown as { location?: { protocol?: string; hostname?: string } };
     const protocol = g.location?.protocol || 'http:';
     const hostname = g.location?.hostname || 'localhost';
-    return `${protocol}//${hostname}:3001`;
+    const host = hostname.toLowerCase();
+    if (host === 'localhost' || host === '127.0.0.1') return `${protocol}//${hostname}:3001`;
+    return `${protocol}//${hostname}/api`;
   }
 
   if (Platform.OS === 'android') return 'http://10.0.2.2:3001';

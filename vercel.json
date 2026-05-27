@@ -2,6 +2,10 @@
   "version": 2,
   "builds": [
     {
+      "src": "api/**/*.js",
+      "use": "@vercel/node"
+    },
+    {
       "src": "package.json",
       "use": "@vercel/static-build",
       "config": {
@@ -12,7 +16,11 @@
   ],
   "rewrites": [
     {
-      "source": "/((?!_expo/|assets/|favicon\\.png|.*\\..*).*)",
+      "source": "/api/(.*)",
+      "destination": "/api/index.js"
+    },
+    {
+      "source": "/((?!api/|_expo/|assets/|favicon\\.png|.*\\..*).*)",
       "destination": "/index.html"
     }
   ]

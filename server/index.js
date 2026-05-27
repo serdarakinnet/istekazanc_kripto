@@ -64,7 +64,11 @@ function errorResponse(res, status, message) {
   return res.status(status).json({ error: message });
 }
 
-async function main() {
+function dbUnavailable(res) {
+  return errorResponse(res, 503, 'Veritabanına bağlanılamadı.');
+}
+
+function createApp() {
   const dbState = { ready: false, lastError: null };
   const binanceTrSymbolsState = { expiresAtMs: 0, quoteAsset: null, symbols: [] };
 
@@ -774,14 +778,23 @@ async function main() {
     }
   });
 
+  return app;
+}
+
+async function main() {
+  const app = createApp();
   const port = Number(process.env.PORT) || 3001;
   app.listen(port, () => {
     process.stdout.write(`API listening on http://localhost:${port}\n`);
   });
 }
 
-main().catch((e) => {
-  process.stderr.write(e instanceof Error ? e.stack || e.message : String(e));
-  process.stderr.write('\n');
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((e) => {
+    process.stderr.write(e instanceof Error ? e.stack || e.message : String(e));
+    process.stderr.write('\n');
+    process.exit(1);
+  });
+}
+
+module.exports = { createApp };
