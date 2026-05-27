@@ -69,7 +69,41 @@ function resolveDatabaseUrl() {
   loadDotEnvIfPresent();
 
   const fromEnv = process.env.DATABASE_URL;
-  if (fromEnv && fromEnv.trim()) return fromEnv.trim();
+  if (fromEnv && fromEnv.trim()) {
+    try {
+      const raw = fromEnv.trim();
+      const u = new URL(raw);
+      if (u.username.startsWith('<') && u.username.endsWith('>')) u.username = u.username.slice(1, -1);
+      if (u.password.startsWith('<') && u.password.endsWith('>')) u.password = u.password.slice(1, -1);
+      return u.toString();
+    } catch {
+      const raw = fromEnv.trim();
+      const m = raw.match(/^(postgres(?:ql)?):\/\/([^@\/]+)@([\s\S]+)$/i);
+      if (!m) return raw;
+      const scheme = m[1];
+      const userInfo = m[2];
+      const rest = m[3];
+      const colon = userInfo.indexOf(':');
+      if (colon <= 0) return raw;
+      const usernameRaw = userInfo.slice(0, colon);
+      const passwordRaw = userInfo.slice(colon + 1);
+      const cleanedUser =
+        usernameRaw.startsWith('<') && usernameRaw.endsWith('>') ? usernameRaw.slice(1, -1) : usernameRaw;
+      const cleanedPass =
+        passwordRaw.startsWith('<') && passwordRaw.endsWith('>') ? passwordRaw.slice(1, -1) : passwordRaw;
+      let decodedUser = cleanedUser;
+      let decodedPass = cleanedPass;
+      try {
+        decodedUser = decodeURIComponent(cleanedUser);
+      } catch {
+      }
+      try {
+        decodedPass = decodeURIComponent(cleanedPass);
+      } catch {
+      }
+      return `${scheme}://${encodeURIComponent(decodedUser)}:${encodeURIComponent(decodedPass)}@${rest}`;
+    }
+  }
 
   const host = process.env.PGHOST?.trim() || process.env.POSTGRES_HOST?.trim() || '127.0.0.1';
   const port = process.env.PGPORT?.trim() || process.env.POSTGRES_PORT?.trim() || '5432';
@@ -86,6 +120,21 @@ function resolveDatabaseUrl() {
 
 const pool = new Pool({
   connectionString: resolveDatabaseUrl(),
+  ssl: (() => {
+    const url = resolveDatabaseUrl();
+    const sslmode = String(process.env.PGSSLMODE || '').trim().toLowerCase();
+    if (sslmode === 'verify-full') return { rejectUnauthorized: true };
+    if (sslmode === 'require' || sslmode === 'verify-ca' || sslmode === 'prefer') {
+      return { rejectUnauthorized: false };
+    }
+
+    if (url.includes('supabase.co') || url.includes('supabase.com')) return { rejectUnauthorized: false };
+    if (url.toLowerCase().includes('sslmode=require')) return { rejectUnauthorized: false };
+    return undefined;
+  })(),
+  connectionTimeoutMillis: Number.isFinite(Number(process.env.PGCONNECT_TIMEOUT_MS))
+    ? Math.max(500, Math.min(20_000, Number(process.env.PGCONNECT_TIMEOUT_MS)))
+    : 8000,
   max: 10,
 });
 

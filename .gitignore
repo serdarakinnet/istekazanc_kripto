@@ -46,5 +46,10 @@ yarn-error.*
 # Trae / IDE artifacts
 Traeresourcesappoutvsworkbenchcontribterminalcommonscriptssafe_rm_aliases.ps1*
 
+# Agent/skills artifacts
+.agents/
+.claude/skills/
+skills-lock.json
+
 # Design exports (stitch)
 stitch_tradefeed_crypto_tracker/

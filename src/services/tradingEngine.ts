@@ -93,6 +93,55 @@ function resolveApiBaseUrl(): string {
 }
 
 const API_BASE_URL = resolveApiBaseUrl();
+let apiHealthOkUntilMs = 0;
+let apiHealthDownUntilMs = 0;
+let apiHealthFailCount = 0;
+let apiHealthInFlight: Promise<boolean> | null = null;
+
+function markApiUnhealthy(nowMs: number) {
+  apiHealthFailCount = Math.min(8, apiHealthFailCount + 1);
+  apiHealthOkUntilMs = 0;
+  apiHealthDownUntilMs = nowMs + Math.min(60_000, 1000 * 2 ** (apiHealthFailCount - 1));
+}
+
+async function isApiHealthy(timeoutMs: number): Promise<boolean> {
+  if (Platform.OS !== 'web') return true;
+
+  const nowMs = Date.now();
+  if (nowMs < apiHealthOkUntilMs) return true;
+  if (nowMs < apiHealthDownUntilMs) return false;
+  if (apiHealthInFlight) return apiHealthInFlight;
+
+  apiHealthInFlight = (async () => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), Math.min(1500, timeoutMs));
+    try {
+      const url = new URL('/health', API_BASE_URL);
+      const res = await fetch(url.toString(), { signal: controller.signal });
+      if (!res.ok) {
+        markApiUnhealthy(Date.now());
+        return false;
+      }
+      const json = (await res.json()) as { ok?: unknown };
+      if (json?.ok !== true) {
+        markApiUnhealthy(Date.now());
+        return false;
+      }
+      apiHealthFailCount = 0;
+      apiHealthDownUntilMs = 0;
+      apiHealthOkUntilMs = Date.now() + 20_000;
+      return true;
+    } catch {
+      markApiUnhealthy(Date.now());
+      return false;
+    } finally {
+      clearTimeout(timeout);
+      apiHealthInFlight = null;
+    }
+  })();
+
+  return apiHealthInFlight;
+}
 
 const DEFAULTS: Required<
   Pick<
@@ -137,6 +186,10 @@ async function fetchBinanceTrAllowedSymbols(params: {
   quoteAsset: string;
   timeoutMs: number;
 }): Promise<Set<string>> {
+  if (Platform.OS === 'web') {
+    const ok = await isApiHealthy(params.timeoutMs);
+    if (!ok) throw new Error('API down');
+  }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), params.timeoutMs);
   try {
@@ -429,17 +482,22 @@ export async function fetchKlines(
 
   let raw: unknown;
   if (Platform.OS === 'web') {
-    const url = buildUrl(API_BASE_URL, '/market/klines', {
-      symbol,
-      interval,
-      limit: String(limit),
-      timeoutMs: String(timeoutMs),
-    });
-    const body = await fetchJson<{ ok?: unknown; data?: unknown }>(url, undefined, timeoutMs);
-    if (body?.ok !== true || !Array.isArray(body?.data) || body.data.length === 0) {
-      throw new Error('Kline proxy başarısız.');
+    const ok = await isApiHealthy(timeoutMs);
+    if (!ok) return [];
+    try {
+      const url = buildUrl(API_BASE_URL, '/market/klines', {
+        symbol,
+        interval,
+        limit: String(limit),
+        timeoutMs: String(timeoutMs),
+      });
+      const body = await fetchJson<{ ok?: unknown; data?: unknown }>(url, undefined, timeoutMs);
+      if (body?.ok !== true || !Array.isArray(body?.data) || body.data.length === 0) return [];
+      raw = body.data;
+    } catch {
+      markApiUnhealthy(Date.now());
+      return [];
     }
-    raw = body.data;
   } else {
     const url = buildUrl(baseUrl, '/api/v3/klines', {
       symbol,
@@ -923,6 +981,11 @@ export async function runDeepFibonacciEngine(
     concurrency: options?.concurrency ?? DEFAULTS.concurrency,
     timeoutMs: options?.timeoutMs ?? DEFAULTS.timeoutMs,
   };
+
+  if (Platform.OS === 'web') {
+    const ok = await isApiHealthy(merged.timeoutMs);
+    if (!ok) throw new Error('API down');
+  }
 
   let filteredTickers = tickers;
   try {
