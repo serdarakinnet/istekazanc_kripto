@@ -4,6 +4,7 @@ import { Pressable, Text, View } from 'react-native';
 
 import { usePriceHistoryStore } from '../../store/priceHistoryStore';
 import { PriceFlash } from './PriceFlash';
+import { SparklineChart } from './SparklineChart';
 
 export interface CryptoCardProps {
   symbol: string;
@@ -46,8 +47,27 @@ function stripTry(symbol: string): string {
   return s.endsWith('TRY') ? s.slice(0, -3) : s;
 }
 
+function ScoreTier({ score }: { score: number }) {
+  const tier =
+    score >= 85
+      ? { label: 'GÜÇLÜ', bg: 'bg-neon-green/15', border: 'border-neon-green/50', text: 'text-neon-green', dot: '#00ff9d' }
+      : score >= 70
+        ? { label: 'ORTA', bg: 'bg-[#FBBF24]/10', border: 'border-[#FBBF24]/50', text: 'text-[#FBBF24]', dot: '#FBBF24' }
+        : { label: 'ZAYIF', bg: 'bg-outline-500/10', border: 'border-outline-500/35', text: 'text-gray-400', dot: '#9ca3af' };
+
+  return (
+    <View className={`flex-row items-center gap-1.5 rounded-full border px-2.5 py-1 ${tier.bg} ${tier.border}`}>
+      <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: tier.dot }} />
+      <Text className={`text-[10px] font-bold tracking-wider ${tier.text}`}>
+        {tier.label} · {Math.round(score)}
+      </Text>
+    </View>
+  );
+}
+
 function CryptoCardImpl({ symbol, entryPrice, targetPrice, stopPrice, score, onClose }: CryptoCardProps) {
   const upperSymbol = useMemo(() => symbol.toUpperCase(), [symbol]);
+  const history = usePriceHistoryStore((s) => s.history[upperSymbol] ?? []);
   const currentPrice = usePriceHistoryStore((s) => s.currentPrices[upperSymbol] ?? null);
 
   const pnlPct = useMemo(() => {
@@ -56,11 +76,7 @@ function CryptoCardImpl({ symbol, entryPrice, targetPrice, stopPrice, score, onC
     return ((currentPrice - entryPrice) / entryPrice) * 100;
   }, [currentPrice, entryPrice]);
 
-  const pnlUp = pnlPct >= 0;
-
-  const badgeBorder =
-    score >= 85 ? 'border-neon-green/60' : score >= 70 ? 'border-[#FBBF24]/70' : 'border-outline-500/35';
-  const badgeText = score >= 85 ? 'text-neon-green' : score >= 70 ? 'text-[#FBBF24]' : 'text-gray-300';
+  const pnlUp = !Number.isNaN(pnlPct) && pnlPct >= 0;
 
   const progressPct = useMemo(() => {
     if (currentPrice === null || !Number.isFinite(currentPrice)) return 0;
@@ -71,76 +87,148 @@ function CryptoCardImpl({ symbol, entryPrice, targetPrice, stopPrice, score, onC
     return clamp(raw, 0, 100);
   }, [currentPrice, stopPrice, targetPrice]);
 
+  const sparkColor = pnlUp ? '#00ff9d' : '#ff3366';
   const displaySymbol = stripTry(symbol);
+
+  const rr = useMemo(() => {
+    if (!Number.isFinite(entryPrice) || !Number.isFinite(targetPrice) || !Number.isFinite(stopPrice)) return null;
+    const reward = targetPrice - entryPrice;
+    const risk = entryPrice - stopPrice;
+    if (risk <= 0) return null;
+    return reward / risk;
+  }, [entryPrice, targetPrice, stopPrice]);
 
   return (
     <PriceFlash
       price={currentPrice}
-      style={[
-        { marginHorizontal: 16, marginVertical: 8 },
-      ]}
+      style={[{ marginHorizontal: 12, marginVertical: 6 }]}
     >
-      <View className="overflow-hidden rounded-2xl border border-outline-500/35 bg-bg-900/60">
-        <View className="p-4">
-          <View className="flex-row items-center justify-between">
-            <Text className="text-[20px] font-semibold text-gray-100">{displaySymbol}</Text>
-            <View className="flex-row items-center gap-2">
+      {/* Card container — elevated look */}
+      <View
+        style={{
+          borderRadius: 20,
+          overflow: 'hidden',
+          borderWidth: 1,
+          borderColor: 'rgba(99,102,126,0.25)',
+          backgroundColor: 'rgba(17,24,46,0.85)',
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 4 },
+          shadowOpacity: 0.35,
+          shadowRadius: 12,
+          elevation: 8,
+        }}
+      >
+        {/* Top accent line based on score */}
+        <View
+          style={{
+            height: 3,
+            backgroundColor:
+              score >= 85 ? '#00ff9d' : score >= 70 ? '#FBBF24' : '#424656',
+          }}
+        />
+
+        <View style={{ padding: 16 }}>
+          {/* Header row */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+            <View>
+              <Text style={{ fontSize: 26, fontWeight: '700', color: '#f3f4f6', letterSpacing: -0.5 }}>
+                {displaySymbol}
+              </Text>
+              <Text style={{ fontSize: 11, color: '#6b7280', marginTop: 2, letterSpacing: 0.5 }}>
+                {symbol.trim().toUpperCase()}
+              </Text>
+            </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               {onClose ? (
                 <Pressable
                   onPress={onClose}
-                  className="rounded-full border border-neon-red/25 bg-neon-red/10 px-3 py-1"
+                  style={{
+                    borderRadius: 20,
+                    borderWidth: 1,
+                    borderColor: 'rgba(255,51,102,0.3)',
+                    backgroundColor: 'rgba(255,51,102,0.1)',
+                    paddingHorizontal: 12,
+                    paddingVertical: 5,
+                  }}
                 >
-                  <Text className="text-xs font-semibold text-neon-red">Kapat</Text>
+                  <Text style={{ fontSize: 11, fontWeight: '700', color: '#ff3366' }}>KAPAT</Text>
                 </Pressable>
               ) : null}
-              <View className={['rounded-full border px-3 py-1', badgeBorder].join(' ')}>
-                <Text className={['text-xs font-semibold', badgeText].join(' ')}>
-                  ⚡ {Math.round(score)}
-                </Text>
-              </View>
+              <ScoreTier score={score} />
             </View>
           </View>
 
-          <View className="mt-4 flex-row items-center justify-between">
-            <View className="flex-1 pr-3">
-              <Text className="text-[16px] font-semibold text-gray-100">
+          {/* Price + Sparkline row */}
+          <View style={{ flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', marginTop: 16 }}>
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: 11, color: '#9ca3af', marginBottom: 4 }}>Güncel Fiyat</Text>
+              <Text style={{ fontSize: 22, fontWeight: '700', color: '#f3f4f6' }}>
                 {currentPrice !== null ? formatTry(currentPrice) : '—'}
               </Text>
-              <Text
-                className={[
-                  'mt-1 text-sm font-semibold',
-                  pnlUp ? 'text-neon-green' : 'text-neon-red',
-                ].join(' ')}
-              >
-                {pnlUp ? '▲' : '▼'} {formatPct(pnlPct)}
-              </Text>
+              {Number.isFinite(pnlPct) ? (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 }}>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: pnlUp ? '#00ff9d' : '#ff3366' }}>
+                    {pnlUp ? '▲' : '▼'} {formatPct(pnlPct)}
+                  </Text>
+                  <Text style={{ fontSize: 11, color: '#6b7280' }}>giriş'ten</Text>
+                </View>
+              ) : (
+                <Text style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>Fiyat bekleniyor…</Text>
+              )}
             </View>
+            {history.length >= 2 ? (
+              <SparklineChart
+                data={history.slice(-30)}
+                width={110}
+                height={52}
+                color={sparkColor}
+              />
+            ) : null}
           </View>
 
-          <View className="mt-4 flex-row justify-between">
+          {/* Divider */}
+          <View style={{ height: 1, backgroundColor: 'rgba(66,70,86,0.3)', marginVertical: 14 }} />
+
+          {/* Entry / Target / Stop */}
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
             <View>
-              <Text className="text-[11px] text-[#A0AEC0]">Giriş</Text>
-              <Text className="mt-1 text-sm font-semibold text-gray-200">
+              <Text style={{ fontSize: 10, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 0.5 }}>Giriş</Text>
+              <Text style={{ fontSize: 13, fontWeight: '600', color: '#e5e7eb', marginTop: 4 }}>
                 {formatTry(entryPrice)}
               </Text>
             </View>
-            <View>
-              <Text className="text-[11px] text-neon-green">Hedef</Text>
-              <Text className="mt-1 text-sm font-semibold text-gray-200">
+            <View style={{ alignItems: 'center' }}>
+              <Text style={{ fontSize: 10, color: '#00ff9d', textTransform: 'uppercase', letterSpacing: 0.5 }}>Hedef</Text>
+              <Text style={{ fontSize: 13, fontWeight: '600', color: '#00ff9d', marginTop: 4 }}>
                 {formatTry(targetPrice)}
               </Text>
+              {Number.isFinite(entryPrice) && Number.isFinite(targetPrice) ? (
+                <Text style={{ fontSize: 10, color: '#00ff9d', opacity: 0.7 }}>
+                  {formatPct(((targetPrice - entryPrice) / entryPrice) * 100)}
+                </Text>
+              ) : null}
             </View>
-            <View>
-              <Text className="text-[11px] text-neon-red">Stop</Text>
-              <Text className="mt-1 text-sm font-semibold text-gray-200">
+            <View style={{ alignItems: 'flex-end' }}>
+              <Text style={{ fontSize: 10, color: '#ff3366', textTransform: 'uppercase', letterSpacing: 0.5 }}>Stop</Text>
+              <Text style={{ fontSize: 13, fontWeight: '600', color: '#ff3366', marginTop: 4 }}>
                 {formatTry(stopPrice)}
               </Text>
+              {rr !== null ? (
+                <Text style={{ fontSize: 10, color: '#9ca3af' }}>R:R {rr.toFixed(1)}</Text>
+              ) : null}
             </View>
           </View>
         </View>
 
-        <View className="h-1 bg-outline-500/20">
-          <View className="h-1 bg-outline-500/20" style={{ width: `${progressPct}%` }} />
+        {/* Progress bar */}
+        <View style={{ height: 5, backgroundColor: 'rgba(66,70,86,0.3)' }}>
+          <View
+            style={{
+              height: 5,
+              width: `${progressPct}%`,
+              backgroundColor: progressPct >= 70 ? '#00ff9d' : progressPct >= 40 ? '#FBBF24' : '#ff3366',
+            }}
+          />
         </View>
       </View>
     </PriceFlash>

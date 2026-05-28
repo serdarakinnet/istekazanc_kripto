@@ -2,7 +2,7 @@ import { useNavigation } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronRight, RefreshCcw, TrendingDown, TrendingUp } from 'lucide-react-native';
 import * as React from 'react';
-import { FlatList, Pressable, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, Pressable, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { CryptoCard } from '../components/CryptoCard/CryptoCard';
@@ -180,7 +180,7 @@ export function DashboardScreen() {
       <FlatList
         data={rows}
         keyExtractor={(item) => (item.kind === 'empty' ? item.id : item.symbol)}
-        contentContainerStyle={{ paddingTop: 24, paddingBottom: 24 }}
+        contentContainerStyle={{ paddingTop: 16, paddingBottom: 100 }}
         ListHeaderComponent={
           <View className="px-6">
             <View className="mb-6 rounded-2xl border border-outline-500/35 bg-bg-900/60 p-4">
@@ -234,28 +234,39 @@ export function DashboardScreen() {
               </View>
             </View>
 
-            <View className="flex-row items-start justify-between">
-              <View className="flex-1 pr-4">
-                <Text className="text-2xl font-semibold text-gray-100">
-                  Aktif Seçimler
-                </Text>
-                <View className="mt-2 flex-row items-center gap-2">
-                  <Text className="text-sm text-gray-400">
-                    En İyi 3 kripto: tarama + canlı fiyat + sparkline.
-                  </Text>
+            {/* Section header */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+              <View style={{ flex: 1, paddingRight: 12 }}>
+                <Text style={{ fontSize: 22, fontWeight: '700', color: '#f3f4f6' }}>Aktif Seçimler</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 }}>
                   <View
-                    className={[
-                      'rounded-full border px-2 py-1',
-                      autoTradeEnabled
-                        ? 'border-neon-green/20 bg-neon-green/10'
-                        : 'border-outline-500/35 bg-bg-900/60',
-                    ].join(' ')}
+                    style={{
+                      borderRadius: 20,
+                      borderWidth: 1,
+                      borderColor: autoTradeEnabled ? 'rgba(0,255,157,0.3)' : 'rgba(66,70,86,0.5)',
+                      backgroundColor: autoTradeEnabled ? 'rgba(0,255,157,0.08)' : 'rgba(17,24,46,0.5)',
+                      paddingHorizontal: 10,
+                      paddingVertical: 4,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 5,
+                    }}
                   >
+                    <View
+                      style={{
+                        width: 6,
+                        height: 6,
+                        borderRadius: 3,
+                        backgroundColor: autoTradeEnabled ? '#00ff9d' : '#6b7280',
+                      }}
+                    />
                     <Text
-                      className={[
-                        'text-[10px] font-semibold',
-                        autoTradeEnabled ? 'text-neon-green' : 'text-outline-400',
-                      ].join(' ')}
+                      style={{
+                        fontSize: 10,
+                        fontWeight: '700',
+                        letterSpacing: 0.8,
+                        color: autoTradeEnabled ? '#00ff9d' : '#6b7280',
+                      }}
                     >
                       {autoTradeEnabled ? 'AUTO-TRADE AÇIK' : 'AUTO-TRADE KAPALI'}
                     </Text>
@@ -279,7 +290,13 @@ export function DashboardScreen() {
                   }
                 }}
                 disabled={scanQuery.isFetching || isScanning}
-                className="rounded-xl border border-outline-500/35 bg-bg-900/60 p-3"
+                style={{
+                  borderRadius: 14,
+                  borderWidth: 1,
+                  borderColor: 'rgba(66,70,86,0.4)',
+                  backgroundColor: 'rgba(17,24,46,0.6)',
+                  padding: 12,
+                }}
                 accessibilityLabel="Yenile"
               >
                 <RefreshCcw
@@ -289,34 +306,69 @@ export function DashboardScreen() {
               </Pressable>
             </View>
 
-            <View className="mt-3 flex-row items-center justify-between">
-              <Text className="text-xs text-gray-500">
+            {/* Son tarama bilgisi */}
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 }}>
+              <Text style={{ fontSize: 11, color: '#6b7280' }}>
                 Min R:R: {Number.isFinite(minRiskReward) ? minRiskReward.toFixed(2) : '—'}
               </Text>
-              <Text className="text-xs text-gray-500">
-                {lastScanMs ? `Son tarama: ${new Date(lastScanMs).toLocaleTimeString()}` : '—'}
+              <Text style={{ fontSize: 11, color: '#6b7280' }}>
+                {lastScanMs ? `Son: ${new Date(lastScanMs).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}` : 'Henüz tarama yapılmadı'}
               </Text>
             </View>
 
+            {/* Tarama durumu göstergesi */}
             {(scanQuery.isLoading || isScanning) && candidates.length === 0 ? (
-              <View className="mt-6 gap-4">
-                <View className="h-[180px] rounded-2xl border border-outline-500/35 bg-bg-900/60" />
-                <View className="h-[180px] rounded-2xl border border-outline-500/35 bg-bg-900/60" />
-                <View className="h-[180px] rounded-2xl border border-outline-500/35 bg-bg-900/60" />
+              <View
+                style={{
+                  marginBottom: 8,
+                  borderRadius: 16,
+                  borderWidth: 1,
+                  borderColor: 'rgba(0,255,157,0.2)',
+                  backgroundColor: 'rgba(0,255,157,0.05)',
+                  padding: 20,
+                  alignItems: 'center',
+                  gap: 12,
+                }}
+              >
+                <ActivityIndicator size="large" color="#00ff9d" />
+                <View style={{ alignItems: 'center', gap: 4 }}>
+                  <Text style={{ fontSize: 14, fontWeight: '600', color: '#d1fae5' }}>
+                    {isScanning ? 'Piyasa Taranıyor…' : 'Kripto Analiz Ediliyor…'}
+                  </Text>
+                  <Text style={{ fontSize: 12, color: '#6b7280', textAlign: 'center' }}>
+                    {isScanning
+                      ? 'Deep Fibonacci V6.5 motoru çalışıyor, en iyi 3 kripto belirleniyor.'
+                      : 'Binance verisi işleniyor, lütfen bekleyin.'}
+                  </Text>
+                </View>
               </View>
             ) : null}
           </View>
         }
         renderItem={({ item }) => {
           if (item.kind === 'empty') {
+            if (isScanning || scanQuery.isLoading) return null;
             return (
-              <View style={{ marginHorizontal: 16, marginVertical: 8 }}>
-                <View className="overflow-hidden rounded-2xl border border-outline-500/35 bg-bg-900/60">
-                  <View className="p-5">
-                    <Text className="text-[15px] font-semibold text-gray-200">
-                      Tarama Sonucu Uygun Kripto Bulunamadı
-                    </Text>
-                  </View>
+              <View style={{ marginHorizontal: 12, marginVertical: 6 }}>
+                <View
+                  style={{
+                    borderRadius: 20,
+                    borderWidth: 1,
+                    borderColor: 'rgba(66,70,86,0.3)',
+                    backgroundColor: 'rgba(17,24,46,0.6)',
+                    borderStyle: 'dashed',
+                    padding: 24,
+                    alignItems: 'center',
+                    gap: 8,
+                  }}
+                >
+                  <Text style={{ fontSize: 28 }}>🔍</Text>
+                  <Text style={{ fontSize: 14, fontWeight: '600', color: '#9ca3af', textAlign: 'center' }}>
+                    Uygun Sinyal Bulunamadı
+                  </Text>
+                  <Text style={{ fontSize: 12, color: '#6b7280', textAlign: 'center', lineHeight: 18 }}>
+                    Motor bu slot için yeterli risk/ödül oranı ({minRiskReward.toFixed(1)}x) bulamadı.{`\n`}Yenile butonuna basarak tekrar taratabilirsiniz.
+                  </Text>
                 </View>
               </View>
             );
