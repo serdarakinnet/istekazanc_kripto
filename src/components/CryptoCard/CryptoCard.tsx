@@ -131,9 +131,14 @@ function CryptoCardImpl({ symbol, entryPrice, targetPrice, stopPrice, score, onC
           {/* Header row */}
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
             <View>
-              <Text style={{ fontSize: 26, fontWeight: '700', color: '#f3f4f6', letterSpacing: -0.5 }}>
-                {displaySymbol}
-              </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Text style={{ fontSize: 26, fontWeight: '700', color: '#f3f4f6', letterSpacing: -0.5 }}>
+                  {displaySymbol}
+                </Text>
+                <View style={{ backgroundColor: 'rgba(0, 255, 157, 0.1)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, borderWidth: 1, borderColor: 'rgba(0, 255, 157, 0.3)' }}>
+                  <Text style={{ fontSize: 9, fontWeight: '700', color: '#00ff9d' }}>AI ✓</Text>
+                </View>
+              </View>
               <Text style={{ fontSize: 11, color: '#6b7280', marginTop: 2, letterSpacing: 0.5 }}>
                 {symbol.trim().toUpperCase()}
               </Text>

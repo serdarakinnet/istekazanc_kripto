@@ -1,4 +1,5 @@
 import { Platform } from 'react-native';
+import { aiFilterCandidates } from './aiFilter';
 
 export type BinanceTicker24h = {
   symbol: string;
@@ -800,18 +801,8 @@ export async function runDeepFibonacciEngine(
     if (!ok) throw new Error('API down');
   }
 
-  let filteredTickers = tickers;
-  try {
-    const allowed = await fetchBinanceTrAllowedSymbols({
-      quoteAsset: merged.quoteAsset,
-      timeoutMs: merged.timeoutMs,
-    });
-    filteredTickers = tickers.filter((t) => allowed.has(String(t.symbol).trim().toUpperCase()));
-  } catch {
-    filteredTickers = tickers;
-  }
-
-  const universe = filterTopPairsByQuoteVolume(filteredTickers, merged);
+  // Binance TR CORS hataları ve geo-block nedeniyle global TRY çiftlerini doğrudan alıyoruz.
+  const universe = filterTopPairsByQuoteVolume(tickers, merged);
   const rejected: ScanResult['rejected'] = [];
 
   const candidates = await mapWithConcurrency(
@@ -878,7 +869,11 @@ export async function runDeepFibonacciEngine(
   );
 
   const picked = candidates.filter((x): x is ScannedCandidate => Boolean(x));
-  const topCandidates = sortDescNumeric(picked, (c) => c.score).slice(
+  
+  // AI Filtresi ve Önceliklendirme
+  const aiFiltered = aiFilterCandidates(picked);
+  
+  const topCandidates = aiFiltered.slice(
     0,
     Math.max(1, Math.trunc(merged.pickTopK)),
   );
@@ -979,10 +974,11 @@ export async function scanTop(options?: ScanOptions): Promise<ScanResult> {
   const desired = Math.max(1, Math.trunc(options?.pickTopK ?? DEFAULTS.pickTopK));
   try {
     const deep = await runDeepFibonacciEngine(tickers, options);
-    if (deep.topCandidates.length >= Math.min(3, desired) && deep.topCandidates.length > 0) {
-      return deep;
+    if (deep.topCandidates.length > 0) {
+      return deep; // 1 tane bile bulsa deep'i döndür, lite sahte sinyallere düşme
     }
   } catch {
   }
-  return buildLiteCandidatesFromTickers(tickers, options);
+  // Yalnızca hiçbir şey bulamazsa veya hata alırsa
+  return { asOfMs: Date.now(), quoteAsset: options?.quoteAsset ?? DEFAULTS.quoteAsset, topCandidates: [], rejected: [] };
 }
