@@ -367,7 +367,7 @@ export function DashboardScreen() {
                     Uygun Sinyal Bulunamadı
                   </Text>
                   <Text style={{ fontSize: 12, color: '#6b7280', textAlign: 'center', lineHeight: 18 }}>
-                    Motor bu slot için yeterli risk/ödül oranı ({minRiskReward.toFixed(1)}x) bulamadı.{`\n`}Yenile butonuna basarak tekrar taratabilirsiniz.
+                    Piyasa şu an strateji kriterlerini (Trend, Hacim, RSI) karşılamıyor olabilir.{`\n`}Yenile butonuna basarak tekrar taratabilirsiniz.
                   </Text>
                 </View>
               </View>

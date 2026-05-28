@@ -728,7 +728,7 @@ function scoreCandidate(params: {
   const longTarget = Number((price + risk * 2.5).toFixed(8));
   const longRR = risk > 0 ? Number(((longTarget - price) / risk).toFixed(2)) : 0;
 
-  const scoreOk = longScore >= 40;
+  const scoreOk = longScore >= 30;
 
   const breakdown: ScoreBreakdown = {
     freshCross: trendLong,
@@ -738,8 +738,8 @@ function scoreCandidate(params: {
     pullbackReclaim: volLong,
     volMultOk: volMult >= 1.0,
     ema21SlopeUp: e21 > e55,
-    flatPenalty: rsi < 40 || rsi > 75,
-    pumpPenalty: volMult >= 3.5 && rsi > 80,
+    flatPenalty: rsi < 30 || rsi > 85,
+    pumpPenalty: volMult >= 4.0 && rsi > 90,
   };
 
   return {

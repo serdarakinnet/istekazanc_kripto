@@ -16,9 +16,8 @@ import { ScannedCandidate } from './tradingEngine';
 export function aiFilterCandidates(candidates: ScannedCandidate[]): ScannedCandidate[] {
   // 1. Hard Filter (Kesin eleme kuralları)
   const filtered = candidates.filter((c) => {
-    // Kural 1: BTCTRY ve ETHTRY ele
-    if (c.symbol === 'BTCTRY' || c.symbol === 'ETHTRY') return false;
-
+    // Kural 1: BTC ve ETH artık serbest (kullanıcı isteğiyle)
+    
     // Kural 2: R:R < 1.5 olanları ele
     if (c.riskReward < 1.5) return false;
 

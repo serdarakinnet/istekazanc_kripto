@@ -87,14 +87,14 @@ async function debugScan() {
       const longTarget = price + risk * 2.5;
       const longRR = risk > 0 ? ((longTarget - price) / risk) : 0;
 
-      const scoreOk = longScore >= 40;
+      const scoreOk = longScore >= 30;
 
       return {
         ok: scoreOk,
         score: longScore,
         gates, rsi, volMult, e5, e21, e55,
-        flatPenalty: rsi < 40 || rsi > 75,
-        pumpPenalty: volMult >= 3.5 && rsi > 80,
+        flatPenalty: rsi < 30 || rsi > 85,
+        pumpPenalty: volMult >= 4.0 && rsi > 90,
       };
   }
 
@@ -112,7 +112,7 @@ async function debugScan() {
     const res = scoreCandidate(closes, highs, lows, volumes);
     
     // AI Filter
-    const aiPassed = res.ok && !res.flatPenalty && !res.pumpPenalty && t.symbol !== 'BTCTRY' && t.symbol !== 'ETHTRY';
+    const aiPassed = res.ok && !res.flatPenalty && !res.pumpPenalty;
 
     console.log(`${t.symbol.padEnd(10)} | Score: ${res.score} | Gates: ${res.gates} | RSI: ${res.rsi.toFixed(1)} | flat: ${res.flatPenalty} | AI Pass: ${aiPassed}`);
   }

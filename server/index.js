@@ -502,6 +502,8 @@ function createApp() {
       const longTarget = +(price + risk * 2.5).toFixed(6);
       const longRR = risk > 0 ? +((longTarget - price) / risk).toFixed(2) : 0;
 
+      const scoreOk = longScore >= 30;
+
       const setupType = trendLong ? 'EMA21_MOMENTUM_PULLBACK' : 'EMA144_GOLDEN_PULLBACK';
       const stopType = setupType.includes('144') ? 'EMA144_DYNAMIC (-3%)' : 'EMA21_DYNAMIC (-3%)';
       const tier = longScore >= 85 ? 'A' : (longScore >= 70 ? 'B' : 'C');
@@ -537,8 +539,8 @@ function createApp() {
           intradayChg: "0.00",
           range12Pct: "0.00",
           chg3: "0.00",
-          isFlat: false,
-          isPump: false,
+          isFlat: rsi < 30 || rsi > 85,
+          isPump: volMult >= 4.0 && rsi > 90,
           gradualVolUpStrict: volMult >= 1.2,
           gradualVolUpSoft: volMult >= 1.05
       });
