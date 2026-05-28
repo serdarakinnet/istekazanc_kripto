@@ -13,6 +13,7 @@ export type UserSettingsRecord = {
   userId: string;
   autoTradeEnabled: boolean;
   minRiskReward: number;
+  customStrategyCode?: string;
   updatedAtMs: number;
 };
 
@@ -205,6 +206,7 @@ export async function upsertUserSettings(params: {
   userId: string;
   autoTradeEnabled: boolean;
   minRiskReward: number;
+  customStrategyCode?: string;
 }): Promise<UserSettingsRecord> {
   const trimmedUserId = params.userId.trim();
   if (!trimmedUserId) throw new Error('Kullanıcı bulunamadı.');
@@ -213,6 +215,7 @@ export async function upsertUserSettings(params: {
     body: JSON.stringify({
       autoTradeEnabled: params.autoTradeEnabled,
       minRiskReward: params.minRiskReward,
+      customStrategyCode: params.customStrategyCode,
     }),
   });
 }

@@ -146,7 +146,8 @@ function createApp() {
       req.path === '/market/last-price' ||
       req.path === '/market/last-prices' ||
       req.path === '/market/ticker/24hr' ||
-      req.path === '/market/klines'
+      req.path === '/market/klines' ||
+      req.path === '/scan'
     ) {
       return next();
     }
@@ -370,6 +371,182 @@ function createApp() {
     }
   });
 
+  app.post('/scan', (req, res) => {
+    try {
+      const requestBody = req.body || {};
+
+      function toNum(v, d = NaN) {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : d;
+      }
+
+      function calcEMA(data, p) {
+        if (!Array.isArray(data) || data.length < p) return null;
+        const k = 2 / (p + 1);
+        let e = data.slice(0, p).reduce((a, b) => a + b, 0) / p;
+        for (let i = p; i < data.length; i++) e = data[i] * k + e * (1 - k);
+        return +e.toFixed(6);
+      }
+
+      function calcRSI(data, p = 14) {
+        if (!Array.isArray(data) || data.length < p + 1) return null;
+        let g = 0, l = 0;
+        for (let i = 1; i <= p; i++) {
+          const d = data[i] - data[i - 1];
+          if (d > 0) g += d; else l -= d;
+        }
+        let ag = g / p, al = l / p;
+        for (let i = p + 1; i < data.length; i++) {
+          const d = data[i] - data[i - 1];
+          ag = (ag * (p - 1) + Math.max(d, 0)) / p;
+          al = (al * (p - 1) + Math.max(-d, 0)) / p;
+        }
+        if (al === 0) return 100;
+        return +(100 - 100 / (1 + ag / al)).toFixed(2);
+      }
+
+      function calcATR(h, l, c, p = 14) {
+        if (!Array.isArray(h) || h.length < p + 1) return null;
+        const trs = [];
+        for (let i = 1; i < h.length; i++) {
+          trs.push(Math.max(h[i] - l[i], Math.abs(h[i] - c[i - 1]), Math.abs(l[i] - c[i - 1])));
+        }
+        if (trs.length < p) return null;
+        return +(trs.slice(-p).reduce((a, b) => a + b, 0) / p).toFixed(6);
+      }
+
+      function calcMACD(data) {
+        if (!Array.isArray(data) || data.length < 35) return null;
+        const series = [];
+        for (let i = 26; i <= data.length; i++) {
+          const e12 = calcEMA(data.slice(0, i), 12);
+          const e26 = calcEMA(data.slice(0, i), 26);
+          if (e12 != null && e26 != null) series.push(e12 - e26);
+        }
+        if (!series.length) return null;
+        const macd = series[series.length - 1];
+        const signal = calcEMA(series, 9);
+        const hist = signal == null ? null : +(macd - signal).toFixed(6);
+        return { macd: +macd.toFixed(6), signal, hist };
+      }
+
+      // 1) SYMBOL ÇÖZÜMLEME
+      let symbol = String(requestBody.symbol || '').toUpperCase().trim();
+      if (!symbol) symbol = 'NO_SYMBOL';
+
+      // 2) KLINES INPUT ÇÖZÜMLEME
+      let klines = requestBody.klines || requestBody.data || [];
+
+      if (!Array.isArray(klines)) klines = [];
+
+      if (!symbol || symbol === 'NO_SYMBOL') {
+        return res.json({ symbol: 'UNKNOWN', motorOk: false, reason: 'symbol bulunamadı' });
+      }
+
+      if (klines.length < 60) {
+        return res.json({ symbol, motorOk: false, reason: `Yetersiz veri: ${klines.length} bar` });
+      }
+
+      // 3) KLINES PARSE
+      const rows = klines.map(k => ({
+        ts: toNum(k?.[0]),
+        o: toNum(k?.[1]),
+        h: toNum(k?.[2]),
+        l: toNum(k?.[3]),
+        c: toNum(k?.[4]),
+        v: toNum(k?.[5]),
+      })).filter(r => r.c > 0 && r.h > 0 && r.l > 0 && r.v >= 0);
+
+      if (rows.length < 60) {
+        return res.json({ symbol, motorOk: false, reason: `Geçerli bar < 60 (${rows.length})` });
+      }
+
+      const closes = rows.map(r => r.c);
+      const highs = rows.map(r => r.h);
+      const lows = rows.map(r => r.l);
+      const volumes = rows.map(r => r.v);
+      const price = closes[closes.length - 1];
+
+      // 4) İNDİKATÖRLER
+      const e5 = calcEMA(closes, 5);
+      const e21 = calcEMA(closes, 21);
+      const e55 = calcEMA(closes, 55);
+      const rsi = calcRSI(closes, 14);
+      const atr = calcATR(highs, lows, closes, 14);
+      const macd = calcMACD(closes);
+
+      if ([e5, e21, e55, rsi, atr].some(v => v == null) || !macd) {
+        return res.json({ symbol, motorOk: false, reason: 'İndikatör hesaplanamadı' });
+      }
+
+      const vol20 = volumes.slice(-20);
+      const vol20avg = vol20.length ? vol20.reduce((a, b) => a + b, 0) / vol20.length : 0;
+      const curVol = volumes[volumes.length - 1];
+      const volMult = vol20avg > 0 ? +(curVol / vol20avg).toFixed(2) : 0;
+
+      // 5) LONG SCORE + STOP/TARGET
+      const trendLong = e5 > e21 && e21 > e55;
+      const macdLong = macd.hist != null && macd.hist > 0;
+      const volLong = volMult >= 1.1;
+
+      const gates = [trendLong, macdLong, volLong].filter(Boolean).length;
+      let longScore = gates * 20 + (rsi > 50 ? 10 : 0) + (volMult > 1.5 ? 10 : 0);
+      longScore = Math.max(0, Math.min(100, Math.round(longScore)));
+
+      let stop = Math.min(price - atr * 1.6, Math.min(...lows.slice(-20)) * 0.99);
+      stop = Math.max(stop, price * 0.92); 
+      stop = Math.min(stop, price * 0.98); 
+      const longStop = +stop.toFixed(6);
+
+      const risk = price - longStop;
+      const longTarget = +(price + risk * 2.5).toFixed(6);
+      const longRR = risk > 0 ? +((longTarget - price) / risk).toFixed(2) : 0;
+
+      const setupType = trendLong ? 'EMA21_MOMENTUM_PULLBACK' : 'EMA144_GOLDEN_PULLBACK';
+      const stopType = setupType.includes('144') ? 'EMA144_DYNAMIC (-3%)' : 'EMA21_DYNAMIC (-3%)';
+      const tier = longScore >= 85 ? 'A' : (longScore >= 70 ? 'B' : 'C');
+      const primaryTrigger = trendLong ? 'EMA21 Pullback + Trend Devam' : '3 Mum Momentum + Hacim';
+
+      // 6) OUTPUT
+      return res.json({
+          symbol,
+          motorOk: true,
+          price: +price.toFixed(6),
+          e5, e21, e55, rsi,
+          macdHist: macd.hist,
+          volMult, atr,
+          longScore,
+          dominantDirection: 'LONG',
+          longStop,
+          longTarget,
+          longRR,
+          score: String(longScore),
+          tier,
+          setup: 'LONG_ONLY',
+          setupType,
+          primaryTrigger,
+          hitRules: `trendLong=${trendLong}, macdLong=${macdLong}, volLong=${volLong}`,
+          scoreDetail: `gates=${gates}, rsi=${rsi}, volMult=${volMult}`,
+          entryPrice: String(price.toFixed(6)),
+          stopLoss: String(longStop.toFixed(6)),
+          takeProfit: String(longTarget.toFixed(6)),
+          stopType,
+          riskReward: String(longRR.toFixed(2)),
+          riskPercent: String((((price - longStop) / price) * 100).toFixed(2)),
+          profitPercent: String((((longTarget - price) / price) * 100).toFixed(2)),
+          intradayChg: "0.00",
+          range12Pct: "0.00",
+          chg3: "0.00",
+          isFlat: false,
+          isPump: false,
+          gradualVolUpStrict: volMult >= 1.2,
+          gradualVolUpSoft: volMult >= 1.05
+      });
+    } catch (e) {
+      return res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+    }
+  });
+
   app.post('/auth/register', wrapAsync(async (req, res) => {
     const email = normalizeEmail(req.body?.email);
     const password = String(req.body?.password || '').trim();
@@ -457,6 +634,7 @@ function createApp() {
           user_id::text as "userId",
           auto_trade_enabled as "autoTradeEnabled",
           min_risk_reward as "minRiskReward",
+          custom_strategy_code as "customStrategyCode",
           updated_at_ms as "updatedAtMs"
         FROM user_settings
         WHERE user_id = $1::uuid
@@ -470,6 +648,7 @@ function createApp() {
       userId: row.userId,
       autoTradeEnabled: Boolean(row.autoTradeEnabled),
       minRiskReward: Number(row.minRiskReward),
+      customStrategyCode: typeof row.customStrategyCode === 'string' ? row.customStrategyCode : undefined,
       updatedAtMs: Number(row.updatedAtMs),
     });
   }));
@@ -481,19 +660,21 @@ function createApp() {
     const autoTradeEnabled = Boolean(req.body?.autoTradeEnabled);
     const minRiskReward = Number(req.body?.minRiskReward);
     if (!Number.isFinite(minRiskReward) || minRiskReward <= 0) return errorResponse(res, 400, 'Min risk/reward hatalı.');
+    const customStrategyCode = typeof req.body?.customStrategyCode === 'string' ? req.body.customStrategyCode : null;
 
     const updatedAtMs = nowMs();
     const result = await pool.query(
       `
-        INSERT INTO user_settings (user_id, auto_trade_enabled, min_risk_reward, updated_at_ms)
-        VALUES ($1::uuid, $2, $3, $4)
+        INSERT INTO user_settings (user_id, auto_trade_enabled, min_risk_reward, custom_strategy_code, updated_at_ms)
+        VALUES ($1::uuid, $2, $3, $4, $5)
         ON CONFLICT (user_id) DO UPDATE SET
           auto_trade_enabled = EXCLUDED.auto_trade_enabled,
           min_risk_reward = EXCLUDED.min_risk_reward,
+          custom_strategy_code = COALESCE(EXCLUDED.custom_strategy_code, user_settings.custom_strategy_code),
           updated_at_ms = EXCLUDED.updated_at_ms
-        RETURNING user_id::text as "userId", auto_trade_enabled as "autoTradeEnabled", min_risk_reward as "minRiskReward", updated_at_ms as "updatedAtMs"
+        RETURNING user_id::text as "userId", auto_trade_enabled as "autoTradeEnabled", min_risk_reward as "minRiskReward", custom_strategy_code as "customStrategyCode", updated_at_ms as "updatedAtMs"
       `,
-      [userId, autoTradeEnabled, minRiskReward, updatedAtMs],
+      [userId, autoTradeEnabled, minRiskReward, customStrategyCode, updatedAtMs],
     );
 
     const row = result.rows[0];
@@ -501,6 +682,7 @@ function createApp() {
       userId: row.userId,
       autoTradeEnabled: Boolean(row.autoTradeEnabled),
       minRiskReward: Number(row.minRiskReward),
+      customStrategyCode: typeof row.customStrategyCode === 'string' ? row.customStrategyCode : undefined,
       updatedAtMs: Number(row.updatedAtMs),
     });
   }));

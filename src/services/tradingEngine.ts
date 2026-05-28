@@ -29,6 +29,7 @@ export type ScanOptions = {
   minRiskReward?: number;
   concurrency?: number;
   timeoutMs?: number;
+  customStrategyCode?: string;
 };
 
 export type ScoreBreakdown = {
@@ -542,6 +543,7 @@ function scoreCandidate(params: {
   lows: number[];
   volumes: number[];
   minRiskReward: number;
+  customStrategyCode?: string;
 }): {
   ok: boolean;
   rejectReason: ScanResult['rejected'][number]['reason'] | null;
@@ -556,6 +558,46 @@ function scoreCandidate(params: {
   ema144: number;
   volMult: number;
 } {
+  if (params.customStrategyCode && params.customStrategyCode.trim().length > 0) {
+    try {
+      const strategyFn = new Function('ctx', params.customStrategyCode);
+      const result = strategyFn({
+        closes: params.closes,
+        highs: params.highs,
+        lows: params.lows,
+        volumes: params.volumes,
+        minRiskReward: params.minRiskReward,
+        emaSeries,
+        sma,
+        pctChange,
+      });
+
+      if (result && typeof result === 'object') {
+        const ok = Boolean(result.ok);
+        return {
+          ok,
+          rejectReason: result.rejectReason || (ok ? null : 'strategy-rejected'),
+          score: Number(result.score) || 0,
+          breakdown: result.breakdown || {
+            freshCross: false, trendOk: false, priceAboveEma21: false,
+            breakout: false, pullbackReclaim: false, volMultOk: false,
+            ema21SlopeUp: false, flatPenalty: false, pumpPenalty: false,
+          },
+          entry: Number(result.entry) || 0,
+          target: Number(result.target) || 0,
+          stop: Number(result.stop) || 0,
+          rr: Number(result.rr) || params.minRiskReward,
+          ema5: Number(result.ema5) || 0,
+          ema21: Number(result.ema21) || 0,
+          ema144: Number(result.ema144) || 0,
+          volMult: Number(result.volMult) || 0,
+        };
+      }
+    } catch (err) {
+      console.warn('Custom strategy execution error:', err);
+    }
+  }
+
   const { closes, highs, lows, volumes } = params;
   const lastIndex = closes.length - 1;
   if (lastIndex < 0) {
@@ -564,384 +606,153 @@ function scoreCandidate(params: {
       rejectReason: 'no-klines',
       score: 0,
       breakdown: {
-        freshCross: false,
-        trendOk: false,
-        priceAboveEma21: false,
-        breakout: false,
-        pullbackReclaim: false,
-        volMultOk: false,
-        ema21SlopeUp: false,
-        flatPenalty: false,
-        pumpPenalty: false,
+        freshCross: false, trendOk: false, priceAboveEma21: false,
+        breakout: false, pullbackReclaim: false, volMultOk: false,
+        ema21SlopeUp: false, flatPenalty: false, pumpPenalty: false,
       },
-      entry: 0,
-      target: 0,
-      stop: 0,
-      rr: 0,
-      ema5: 0,
-      ema21: 0,
-      ema144: 0,
-      volMult: 0,
+      entry: 0, target: 0, stop: 0, rr: 0,
+      ema5: 0, ema21: 0, ema144: 0, volMult: 0,
     };
   }
 
-  if (closes.length < 80 || highs.length !== closes.length || lows.length !== closes.length) {
+  if (closes.length < 60 || highs.length !== closes.length || lows.length !== closes.length) {
     return {
       ok: false,
       rejectReason: 'not-enough-data',
       score: 0,
       breakdown: {
-        freshCross: false,
-        trendOk: false,
-        priceAboveEma21: false,
-        breakout: false,
-        pullbackReclaim: false,
-        volMultOk: false,
-        ema21SlopeUp: false,
-        flatPenalty: false,
-        pumpPenalty: false,
+        freshCross: false, trendOk: false, priceAboveEma21: false,
+        breakout: false, pullbackReclaim: false, volMultOk: false,
+        ema21SlopeUp: false, flatPenalty: false, pumpPenalty: false,
       },
-      entry: 0,
-      target: 0,
-      stop: 0,
-      rr: 0,
-      ema5: 0,
-      ema21: 0,
-      ema144: 0,
-      volMult: 0,
+      entry: 0, target: 0, stop: 0, rr: 0,
+      ema5: 0, ema21: 0, ema144: 0, volMult: 0,
     };
   }
 
-  const ema5Series = emaSeries(closes, 5);
-  const ema21Series = emaSeries(closes, 21);
-  if (ema5Series.length === 0 || ema21Series.length === 0) {
-    return {
-      ok: false,
-      rejectReason: 'not-enough-data',
-      score: 0,
-      breakdown: {
-        freshCross: false,
-        trendOk: false,
-        priceAboveEma21: false,
-        breakout: false,
-        pullbackReclaim: false,
-        volMultOk: false,
-        ema21SlopeUp: false,
-        flatPenalty: false,
-        pumpPenalty: false,
-      },
-      entry: 0,
-      target: 0,
-      stop: 0,
-      rr: 0,
-      ema5: 0,
-      ema21: 0,
-      ema144: 0,
-      volMult: 0,
-    };
-  }
-
-  const ema5 = ema5Series[lastIndex];
-  const ema21 = ema21Series[lastIndex];
-  const ema144 = 0;
-
-  if (!Number.isFinite(ema5) || !Number.isFinite(ema21)) {
-    return {
-      ok: false,
-      rejectReason: 'not-enough-data',
-      score: 0,
-      breakdown: {
-        freshCross: false,
-        trendOk: false,
-        priceAboveEma21: false,
-        breakout: false,
-        pullbackReclaim: false,
-        volMultOk: false,
-        ema21SlopeUp: false,
-        flatPenalty: false,
-        pumpPenalty: false,
-      },
-      entry: 0,
-      target: 0,
-      stop: 0,
-      rr: 0,
-      ema5,
-      ema21,
-      ema144,
-      volMult: 0,
-    };
-  }
-
-  const prevIndex = lastIndex - 1;
-  if (prevIndex < 0) {
-    return {
-      ok: false,
-      rejectReason: 'not-enough-data',
-      score: 0,
-      breakdown: {
-        freshCross: false,
-        trendOk: false,
-        priceAboveEma21: false,
-        breakout: false,
-        pullbackReclaim: false,
-        volMultOk: false,
-        ema21SlopeUp: false,
-        flatPenalty: false,
-        pumpPenalty: false,
-      },
-      entry: 0,
-      target: 0,
-      stop: 0,
-      rr: 0,
-      ema5,
-      ema21,
-      ema144,
-      volMult: 0,
-    };
-  }
-
-  const prevEma5 = ema5Series[prevIndex];
-  const prevEma21 = ema21Series[prevIndex];
-  if (!Number.isFinite(prevEma5) || !Number.isFinite(prevEma21)) {
-    return {
-      ok: false,
-      rejectReason: 'not-enough-data',
-      score: 0,
-      breakdown: {
-        freshCross: false,
-        trendOk: false,
-        priceAboveEma21: false,
-        breakout: false,
-        pullbackReclaim: false,
-        volMultOk: false,
-        ema21SlopeUp: false,
-        flatPenalty: false,
-        pumpPenalty: false,
-      },
-      entry: 0,
-      target: 0,
-      stop: 0,
-      rr: 0,
-      ema5,
-      ema21,
-      ema144,
-      volMult: 0,
-    };
-  }
-
-  let lastCrossUpBarsAgo = 999;
-  const maxLookback = Math.min(20, lastIndex);
-  for (let idx = lastIndex; idx >= 1 && lastIndex - idx <= maxLookback; idx -= 1) {
-    const e5Prev = ema5Series[idx - 1];
-    const e21Prev = ema21Series[idx - 1];
-    const e5Now = ema5Series[idx];
-    const e21Now = ema21Series[idx];
-    if (!Number.isFinite(e5Prev) || !Number.isFinite(e21Prev) || !Number.isFinite(e5Now) || !Number.isFinite(e21Now)) {
-      continue;
-    }
-    if (e5Prev <= e21Prev && e5Now > e21Now) {
-      lastCrossUpBarsAgo = lastIndex - idx;
-      break;
-    }
-  }
-  const freshCross = lastCrossUpBarsAgo <= 6;
-
-  const lastClose = closes[lastIndex];
-  const prevClose = closes[prevIndex];
-  const trendOk = ema5 > ema21;
-  if (!trendOk) {
-    return {
-      ok: false,
-      rejectReason: 'trend-failed',
-      score: 0,
-      breakdown: {
-        freshCross,
-        trendOk: false,
-        priceAboveEma21: false,
-        breakout: false,
-        pullbackReclaim: false,
-        volMultOk: false,
-        ema21SlopeUp: false,
-        flatPenalty: false,
-        pumpPenalty: false,
-      },
-      entry: lastClose,
-      target: 0,
-      stop: 0,
-      rr: 0,
-      ema5,
-      ema21,
-      ema144,
-      volMult: 0,
-    };
-  }
-
-  const priceAboveEma21 = lastClose > ema21;
-
-  const eps = 0.0015;
-  const inBarTouch = (low: number, high: number, ma: number): boolean => {
-    return low <= ma * (1 + eps) && high >= ma * (1 - eps);
+  // Deep Fibonacci Engine V6.5 calculations
+  const calcEMA = (data: number[], p: number): number | null => {
+    if (data.length < p) return null;
+    const k = 2 / (p + 1);
+    let e = data.slice(0, p).reduce((a, b) => a + b, 0) / p;
+    for (let i = p; i < data.length; i++) e = data[i] * k + e * (1 - k);
+    return e;
   };
 
-  const touchNow = inBarTouch(lows[lastIndex], highs[lastIndex], ema21);
-  const touchPrev = prevIndex >= 0 ? inBarTouch(lows[prevIndex], highs[prevIndex], ema21) : false;
-  const prev2Index = lastIndex - 2;
-  const touchPrev2 =
-    prev2Index >= 0 ? inBarTouch(lows[prev2Index], highs[prev2Index], ema21) : false;
-  const touchRecent = touchNow || touchPrev || touchPrev2;
+  const calcRSI = (data: number[], p = 14): number | null => {
+    if (data.length < p + 1) return null;
+    let g = 0, l = 0;
+    for (let i = 1; i <= p; i++) {
+      const d = data[i] - data[i - 1];
+      if (d > 0) g += d; else l -= d;
+    }
+    let ag = g / p, al = l / p;
+    for (let i = p + 1; i < data.length; i++) {
+      const d = data[i] - data[i - 1];
+      ag = (ag * (p - 1) + Math.max(d, 0)) / p;
+      al = (al * (p - 1) + Math.max(-d, 0)) / p;
+    }
+    if (al === 0) return 100;
+    return 100 - 100 / (1 + ag / al);
+  };
 
-  const breakout = lastClose >= ema21 * 1.003;
-  const pullbackReclaim = touchRecent && lastClose > ema21;
-  const triggerOk = breakout || pullbackReclaim;
-  const entrySignal = trendOk && priceAboveEma21 && freshCross && triggerOk;
+  const calcATR = (h: number[], l: number[], c: number[], p = 14): number | null => {
+    if (h.length < p + 1) return null;
+    const trs = [];
+    for (let i = 1; i < h.length; i++) {
+      trs.push(Math.max(h[i] - l[i], Math.abs(h[i] - c[i - 1]), Math.abs(l[i] - c[i - 1])));
+    }
+    if (trs.length < p) return null;
+    return trs.slice(-p).reduce((a, b) => a + b, 0) / p;
+  };
 
-  const volAvg40 =
-    volumes.length >= 41
-      ? volumes.slice(-41, -1).reduce((a, b) => a + b, 0) / 40
-      : volumes.slice(0, -1).reduce((a, b) => a + b, 0) / Math.max(1, volumes.length - 1);
-  const volMult = volAvg40 > 0 ? Number((volumes[lastIndex] / volAvg40).toFixed(2)) : 0;
-  const volMultOk = volMult >= 1.0;
+  const calcMACD = (data: number[]): { macd: number; signal: number | null; hist: number | null } | null => {
+    if (data.length < 35) return null;
+    const series = [];
+    for (let i = 26; i <= data.length; i++) {
+      const e12 = calcEMA(data.slice(0, i), 12);
+      const e26 = calcEMA(data.slice(0, i), 26);
+      if (e12 != null && e26 != null) series.push(e12 - e26);
+    }
+    if (!series.length) return null;
+    const macd = series[series.length - 1];
+    const signal = calcEMA(series, 9);
+    const hist = signal == null ? null : macd - signal;
+    return { macd, signal, hist };
+  };
 
-  const hh12 = Math.max(...highs.slice(-12));
-  const ll12 = Math.min(...lows.slice(-12));
-  const range12Pct = Number((((hh12 - ll12) / lastClose) * 100).toFixed(2));
-  const flatPenalty = range12Pct < 1.2;
+  const price = closes[closes.length - 1];
 
-  const ema21_5ago = lastIndex - 5 >= 0 ? ema21Series[lastIndex - 5] : Number.NaN;
-  const ema21SlopePct = Number.isFinite(ema21_5ago) ? pctChange(ema21, ema21_5ago) : 0;
-  const ema21SlopeUp = ema21SlopePct > 0;
+  const e5 = calcEMA(closes, 5);
+  const e21 = calcEMA(closes, 21);
+  const e55 = calcEMA(closes, 55);
+  const rsi = calcRSI(closes, 14);
+  const atr = calcATR(highs, lows, closes, 14);
+  const macd = calcMACD(closes);
 
-  const chg3 =
-    lastIndex - 3 >= 0 && closes[lastIndex - 3] !== 0
-      ? Number((((lastClose - closes[lastIndex - 3]) / closes[lastIndex - 3]) * 100).toFixed(2))
-      : 0;
-  const pumpPenalty = chg3 >= 10 && volMult >= 3.5;
-
-  let score = 0;
-  if (freshCross) score += 30;
-  if (trendOk) score += 18;
-  if (priceAboveEma21) score += 12;
-  if (breakout) score += 14;
-  if (pullbackReclaim) score += 16;
-  if (volMultOk) score += 8;
-  if (ema21SlopeUp) score += 10;
-  if (flatPenalty) score -= 20;
-  if (pumpPenalty) score -= 12;
-  score = Math.max(0, Math.min(100, Math.round(score)));
-
-  const stop = Number((ema21 * 0.97).toFixed(8));
-  const entry = Number(lastClose.toFixed(8));
-  const rrTarget = params.minRiskReward;
-  const riskRaw = (entry - stop) / entry;
-
-  if (entrySignal && (!Number.isFinite(riskRaw) || riskRaw <= 0)) {
+  if (e5 == null || e21 == null || e55 == null || rsi == null || atr == null || !macd) {
     return {
       ok: false,
-      rejectReason: 'invalid-risk',
+      rejectReason: 'not-enough-data',
       score: 0,
       breakdown: {
-        freshCross,
-        trendOk,
-        priceAboveEma21,
-        breakout,
-        pullbackReclaim,
-        volMultOk,
-        ema21SlopeUp,
-        flatPenalty,
-        pumpPenalty,
+        freshCross: false, trendOk: false, priceAboveEma21: false,
+        breakout: false, pullbackReclaim: false, volMultOk: false,
+        ema21SlopeUp: false, flatPenalty: false, pumpPenalty: false,
       },
-      entry,
-      target: 0,
-      stop,
-      rr: 0,
-      ema5,
-      ema21,
-      ema144,
-      volMult,
+      entry: price, target: 0, stop: 0, rr: 0,
+      ema5: 0, ema21: 0, ema144: 0, volMult: 0,
     };
   }
 
-  const target = Number((entry * (1 + Math.max(0, riskRaw) * rrTarget)).toFixed(8));
-  const rr = rrTarget;
+  const vol20 = volumes.slice(-20);
+  const vol20avg = vol20.length ? vol20.reduce((a, b) => a + b, 0) / vol20.length : 0;
+  const curVol = volumes[volumes.length - 1];
+  const volMult = vol20avg > 0 ? Number((curVol / vol20avg).toFixed(2)) : 0;
 
-  if (!entrySignal) {
-    return {
-      ok: false,
-      rejectReason: 'entry-failed',
-      score,
-      breakdown: {
-        freshCross,
-        trendOk,
-        priceAboveEma21,
-        breakout,
-        pullbackReclaim,
-        volMultOk,
-        ema21SlopeUp,
-        flatPenalty,
-        pumpPenalty,
-      },
-      entry,
-      target,
-      stop,
-      rr,
-      ema5,
-      ema21,
-      ema144,
-      volMult,
-    };
-  }
+  const trendLong = e5 > e21 && e21 > e55;
+  const macdLong = macd.hist != null && macd.hist > 0;
+  const volLong = volMult >= 1.1;
 
-  if (score < 55) {
-    return {
-      ok: false,
-      rejectReason: 'score-low',
-      score,
-      breakdown: {
-        freshCross,
-        trendOk,
-        priceAboveEma21,
-        breakout,
-        pullbackReclaim,
-        volMultOk,
-        ema21SlopeUp,
-        flatPenalty,
-        pumpPenalty,
-      },
-      entry,
-      target,
-      stop,
-      rr,
-      ema5,
-      ema21,
-      ema144,
-      volMult,
-    };
-  }
+  const gates = [trendLong, macdLong, volLong].filter(Boolean).length;
+  let longScore = gates * 20 + (rsi > 50 ? 10 : 0) + (volMult > 1.5 ? 10 : 0);
+  longScore = Math.max(0, Math.min(100, Math.round(longScore)));
+
+  let stop = Math.min(price - atr * 1.6, Math.min(...lows.slice(-20)) * 0.99);
+  stop = Math.max(stop, price * 0.92); 
+  stop = Math.min(stop, price * 0.98); 
+  const longStop = Number(stop.toFixed(8));
+
+  const risk = price - longStop;
+  const longTarget = Number((price + risk * 2.5).toFixed(8));
+  const longRR = risk > 0 ? Number(((longTarget - price) / risk).toFixed(2)) : 0;
+
+  const scoreOk = longScore >= 55;
 
   const breakdown: ScoreBreakdown = {
-    freshCross,
-    trendOk,
-    priceAboveEma21,
-    breakout,
-    pullbackReclaim,
-    volMultOk,
-    ema21SlopeUp,
-    flatPenalty,
-    pumpPenalty,
+    freshCross: trendLong,
+    trendOk: trendLong,
+    priceAboveEma21: price > e21,
+    breakout: macdLong,
+    pullbackReclaim: volLong,
+    volMultOk: volMult >= 1.0,
+    ema21SlopeUp: e21 > e55,
+    flatPenalty: rsi < 40 || rsi > 75,
+    pumpPenalty: volMult >= 3.5 && rsi > 80,
   };
 
   return {
-    ok: true,
-    rejectReason: null,
-    score,
+    ok: scoreOk,
+    rejectReason: scoreOk ? null : 'score-low',
+    score: longScore,
     breakdown,
-    entry,
-    target,
-    stop,
-    rr,
-    ema5,
-    ema21,
-    ema144,
+    entry: Number(price.toFixed(8)),
+    target: longTarget,
+    stop: longStop,
+    rr: longRR,
+    ema5: Number(e5.toFixed(8)),
+    ema21: Number(e21.toFixed(8)),
+    ema144: Number(e55.toFixed(8)),
     volMult,
   };
 }
@@ -1025,6 +836,7 @@ export async function runDeepFibonacciEngine(
           lows,
           volumes,
           minRiskReward: merged.minRiskReward,
+          customStrategyCode: merged.customStrategyCode,
         });
 
         if (!scored.ok) {

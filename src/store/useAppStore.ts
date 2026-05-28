@@ -26,6 +26,7 @@ import {
 export type AppSettings = {
   autoTradeEnabled: boolean;
   minRiskReward: number;
+  customStrategyCode?: string;
 };
 
 export type TradeOutcome = 'TP' | 'SL';
@@ -222,6 +223,7 @@ async function flushPendingToDb(params: {
         userId,
         autoTradeEnabled: params.pending.settings.autoTradeEnabled,
         minRiskReward: params.pending.settings.minRiskReward,
+        customStrategyCode: params.pending.settings.customStrategyCode,
       });
       await clearPendingFields(userId, ['settings']);
     } catch {
@@ -330,6 +332,7 @@ export const useAppStore = create<AppState>()(
                 Number.isFinite(Number(settingsRow.minRiskReward)) && Number(settingsRow.minRiskReward) > 0
                   ? Number(settingsRow.minRiskReward)
                   : DEFAULT_SETTINGS.minRiskReward,
+              customStrategyCode: typeof settingsRow.customStrategyCode === 'string' ? settingsRow.customStrategyCode : undefined,
             }
           : DEFAULT_SETTINGS;
 
@@ -689,6 +692,7 @@ export const useAppStore = create<AppState>()(
                 userId,
                 autoTradeEnabled: pending.settings.autoTradeEnabled,
                 minRiskReward: pending.settings.minRiskReward,
+                customStrategyCode: pending.settings.customStrategyCode,
               });
               await clearPendingFields(userId, ['settings']);
             } catch {

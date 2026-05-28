@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Eye, EyeOff, KeyRound, Minus, Plus, Shield, ToggleLeft, ToggleRight } from 'lucide-react-native';
+import { Code2, Eye, EyeOff, KeyRound, Minus, Plus, Shield, ToggleLeft, ToggleRight } from 'lucide-react-native';
 import { Pressable, ScrollView, Switch, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -219,6 +219,47 @@ export function ProfileScreen() {
                   {saving ? 'Kaydediliyor…' : 'API Key Güncelle'}
                 </Text>
               </Pressable>
+            </View>
+          </View>
+
+          <View className="mt-6 rounded-2xl border border-outline-500/35 bg-bg-900/60 p-4">
+            <View className="flex-row items-center justify-between">
+              <View className="flex-row items-center gap-2">
+                <Code2 size={16} color="#9ca3af" />
+                <Text className="text-sm font-semibold text-gray-200">
+                  Strateji (JavaScript)
+                </Text>
+              </View>
+            </View>
+
+            <Text className="mt-2 text-xs text-gray-500">
+              Kendi alım-satım stratejinizi kodlayın. Kullanılabilir değişkenler: closes, highs, lows, volumes, minRiskReward, emaSeries. Return formatı: {`{`} ok, score, entry, target, stop {`}`} olmalıdır.
+            </Text>
+
+            <View className="mt-4 gap-3">
+              <View className="rounded-2xl border border-outline-500/35 bg-bg-950/40 px-4 py-3">
+                <TextInput
+                  value={settings.customStrategyCode ?? ''}
+                  onChangeText={(text) => updateSettings({ customStrategyCode: text })}
+                  placeholder="/* Strateji kodunuzu buraya yazın veya yapıştırın.\n\nBoş bırakırsanız sistem varsayılan stratejiyi kullanır. */"
+                  placeholderTextColor="#6b7280"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  multiline
+                  textAlignVertical="top"
+                  className="text-xs font-mono text-gray-100 min-h-[200px]"
+                />
+              </View>
+              {settings.customStrategyCode && settings.customStrategyCode.trim().length > 0 ? (
+                <Pressable
+                  onPress={() => updateSettings({ customStrategyCode: '' })}
+                  className="mt-1 rounded-xl border border-neon-red/25 bg-neon-red/10 px-4 py-3"
+                >
+                  <Text className="text-center text-sm font-semibold text-neon-red">
+                    Kodu Temizle (Varsayılana Dön)
+                  </Text>
+                </Pressable>
+              ) : null}
             </View>
           </View>
 

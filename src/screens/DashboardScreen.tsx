@@ -1,5 +1,6 @@
+import { useNavigation } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
-import { RefreshCcw } from 'lucide-react-native';
+import { ChevronRight, RefreshCcw, TrendingDown, TrendingUp } from 'lucide-react-native';
 import * as React from 'react';
 import { FlatList, Pressable, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -12,6 +13,8 @@ import { usePriceHistoryStore } from '../store/priceHistoryStore';
 import { useAppStore } from '../store/useAppStore';
 
 export function DashboardScreen() {
+  const navigation = useNavigation<any>();
+  const reports = useAppStore((s) => s.reports);
   const rawMinRiskReward = useAppStore((s) => s.settings.minRiskReward);
   const autoTradeEnabled = useAppStore((s) => s.settings.autoTradeEnabled);
   const watchlist = useAppStore((s) => s.watchlist);
@@ -21,6 +24,7 @@ export function DashboardScreen() {
   const closePositionManually = useAppStore((s) => s.closePositionManually);
 
   const lastRotateMsRef = React.useRef(0);
+  const [isScanning, setIsScanning] = React.useState(false);
 
   const minRiskReward = React.useMemo(() => {
     const n = typeof rawMinRiskReward === 'number' ? rawMinRiskReward : Number(rawMinRiskReward);
@@ -55,6 +59,29 @@ export function DashboardScreen() {
     setWatchlist(next, asOfMs);
   }, [lastScanMs, scanQuery.data?.asOfMs, scanQuery.data?.topCandidates, setWatchlist]);
 
+  // GÖREV 1: Auto-trade açıkken ve aktif pozisyon kalmadığında otomatik taramayı tetikle
+  React.useEffect(() => {
+    if (autoTradeEnabled && positions.length === 0 && !isScanning) {
+      const triggerAutoScan = async () => {
+        setIsScanning(true);
+        try {
+          await runInitialScanAndSetPositions();
+        } catch (e) {
+          console.error('Otomatik tarama hatası:', e);
+        } finally {
+          setIsScanning(false);
+        }
+      };
+
+      const now = Date.now();
+      const lastScan = lastScanMs ?? 0;
+      // 10 saniyelik cooldown ile sonsuz hızlı tarama döngüsünü engelle
+      if (now - lastScan > 10000) {
+        void triggerAutoScan();
+      }
+    }
+  }, [autoTradeEnabled, positions.length, lastScanMs, isScanning]);
+
   const showingPositions = autoTradeEnabled && positions.length > 0;
   const candidates = React.useMemo(() => {
     const base =
@@ -80,6 +107,23 @@ export function DashboardScreen() {
     }
     return out;
   }, [autoTradeEnabled, positions, scanQuery.data?.topCandidates, watchlist]);
+
+  const todayReports = React.useMemo(() => {
+    const now = Date.now();
+    const cutoff = now - 24 * 60 * 60 * 1000;
+    return reports.filter((r) => r.closedAtMs >= cutoff);
+  }, [reports]);
+
+  const todayStats = React.useMemo(() => {
+    const total = todayReports.length;
+    let wins = 0;
+    let netPnlPct = 0;
+    for (const r of todayReports) {
+      if (r.outcome === 'TP') wins++;
+      if (Number.isFinite(r.pnlPct)) netPnlPct += r.pnlPct;
+    }
+    return { total, wins, losses: total - wins, netPnlPct };
+  }, [todayReports]);
 
   type Row =
     | ({ kind: 'crypto' } & (typeof candidates)[number])
@@ -139,6 +183,57 @@ export function DashboardScreen() {
         contentContainerStyle={{ paddingTop: 24, paddingBottom: 24 }}
         ListHeaderComponent={
           <View className="px-6">
+            <View className="mb-6 rounded-2xl border border-outline-500/35 bg-bg-900/60 p-4">
+              <View className="flex-row items-center justify-between border-b border-outline-500/20 pb-3">
+                <View>
+                  <Text className="text-xs font-medium text-gray-400">Son 24 Saat Performansı</Text>
+                  <View className="mt-1 flex-row items-baseline gap-2">
+                    <Text className={`text-2xl font-bold ${todayStats.netPnlPct >= 0 ? 'text-neon-green' : 'text-neon-red'}`}>
+                      {todayStats.netPnlPct > 0 ? '+' : ''}{todayStats.netPnlPct.toFixed(2)}%
+                    </Text>
+                    <Text className="text-xs text-gray-500">
+                      ({todayStats.wins} TP / {todayStats.losses} SL)
+                    </Text>
+                  </View>
+                </View>
+                <Pressable
+                  onPress={() => navigation.navigate('Reports')}
+                  className="flex-row items-center rounded-lg bg-bg-950/50 px-3 py-2 border border-outline-500/20"
+                >
+                  <Text className="text-xs font-semibold text-gray-300 mr-1">Raporlar</Text>
+                  <ChevronRight size={14} color="#d1d5db" />
+                </Pressable>
+              </View>
+
+              <View className="pt-3">
+                {todayReports.length === 0 ? (
+                  <Text className="py-2 text-center text-xs text-gray-500">Son 24 saatte işlem bulunmuyor.</Text>
+                ) : (
+                  todayReports.slice(0, 3).map((r, i) => {
+                    const isWin = r.outcome === 'TP';
+                    return (
+                      <View key={r.id} className={`flex-row items-center justify-between ${i !== 0 ? 'mt-3' : ''}`}>
+                        <View className="flex-row items-center gap-2">
+                          <View className={`rounded-full p-1.5 ${isWin ? 'bg-neon-green/10' : 'bg-neon-red/10'}`}>
+                            {isWin ? <TrendingUp size={14} color="#00ff9d" /> : <TrendingDown size={14} color="#ff3366" />}
+                          </View>
+                          <Text className="text-[15px] font-semibold text-gray-200">{r.symbol}</Text>
+                        </View>
+                        <View className="items-end">
+                          <Text className={`text-sm font-semibold ${isWin ? 'text-neon-green' : 'text-neon-red'}`}>
+                            {isWin ? '+' : ''}{r.pnlPct.toFixed(2)}%
+                          </Text>
+                          <Text className="text-[10px] text-gray-500">
+                            {new Date(r.closedAtMs).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}
+                          </Text>
+                        </View>
+                      </View>
+                    );
+                  })
+                )}
+              </View>
+            </View>
+
             <View className="flex-row items-start justify-between">
               <View className="flex-1 pr-4">
                 <Text className="text-2xl font-semibold text-gray-100">
@@ -169,20 +264,27 @@ export function DashboardScreen() {
               </View>
 
               <Pressable
-                onPress={() => {
+                onPress={async () => {
                   if (autoTradeEnabled) {
-                    void runInitialScanAndSetPositions().catch(() => {});
+                    setIsScanning(true);
+                    try {
+                      await runInitialScanAndSetPositions();
+                    } catch (e) {
+                      console.error('Yenileme tarama hatası:', e);
+                    } finally {
+                      setIsScanning(false);
+                    }
                   } else {
                     scanQuery.refetch();
                   }
                 }}
-                disabled={scanQuery.isFetching}
+                disabled={scanQuery.isFetching || isScanning}
                 className="rounded-xl border border-outline-500/35 bg-bg-900/60 p-3"
                 accessibilityLabel="Yenile"
               >
                 <RefreshCcw
                   size={18}
-                  color={scanQuery.isFetching ? '#6b7280' : '#9ca3af'}
+                  color={(scanQuery.isFetching || isScanning) ? '#6b7280' : '#9ca3af'}
                 />
               </Pressable>
             </View>
@@ -196,7 +298,7 @@ export function DashboardScreen() {
               </Text>
             </View>
 
-            {scanQuery.isLoading && candidates.length === 0 ? (
+            {(scanQuery.isLoading || isScanning) && candidates.length === 0 ? (
               <View className="mt-6 gap-4">
                 <View className="h-[180px] rounded-2xl border border-outline-500/35 bg-bg-900/60" />
                 <View className="h-[180px] rounded-2xl border border-outline-500/35 bg-bg-900/60" />
