@@ -226,39 +226,37 @@ function createApp() {
     let symbols = [];
     let fetchError = null;
 
-    // 1. Try Binance TR API
+    // 1. Try Binance Vision API first (most resilient for Vercel/US regions)
     try {
-      const r = await fetch('https://www.binance.tr/open/v1/common/symbols', {
-        headers: {
-          'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        }
-      });
-      if (r.ok) {
-        const body = await r.json();
-        const list = body?.data?.list;
-        if (Array.isArray(list)) {
-          symbols = list
-            .map((x) => (typeof x?.symbol === 'string' ? x.symbol : ''))
-            .map((s) => s.trim().toUpperCase())
-            .filter(Boolean)
-            .filter((s) => s.endsWith(`_${quoteAsset}`))
-            .map((s) => s.replace('_', ''));
-        }
-      } else {
-        fetchError = `Binance TR HTTP ${r.status}`;
+      const body = await fetchJsonFromBinance('/api/v3/exchangeInfo', null, 5000);
+      if (Array.isArray(body?.symbols)) {
+        symbols = body.symbols
+          .filter((s) => s.status === 'TRADING' && s.quoteAsset === quoteAsset)
+          .map((s) => s.symbol);
       }
     } catch (e) {
       fetchError = e instanceof Error ? e.message : String(e);
     }
 
-    // 2. Fallback to Global Binance API if TR fails or returns empty
+    // 2. Fallback to Binance TR API if Vision fails (unlikely on Vercel but good for local)
     if (symbols.length === 0) {
       try {
-        const body = await fetchJsonFromBinance('/api/v3/exchangeInfo', null, 5000);
-        if (Array.isArray(body?.symbols)) {
-          symbols = body.symbols
-            .filter((s) => s.status === 'TRADING' && s.quoteAsset === quoteAsset)
-            .map((s) => s.symbol);
+        const r = await fetch('https://www.binance.tr/open/v1/common/symbols', {
+          headers: {
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          }
+        });
+        if (r.ok) {
+          const body = await r.json();
+          const list = body?.data?.list;
+          if (Array.isArray(list)) {
+            symbols = list
+              .map((x) => (typeof x?.symbol === 'string' ? x.symbol : ''))
+              .map((s) => s.trim().toUpperCase())
+              .filter(Boolean)
+              .filter((s) => s.endsWith(`_${quoteAsset}`))
+              .map((s) => s.replace('_', ''));
+          }
         }
       } catch (e) {
         fetchError = (fetchError ? fetchError + ' | ' : '') + (e instanceof Error ? e.message : String(e));
