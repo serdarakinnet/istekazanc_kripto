@@ -109,6 +109,57 @@ function createApp() {
     };
   };
 
+  app.get('/diag/api-check', wrapAsync(async (req, res) => {
+    const results = {};
+    const targets = [
+      { name: 'Binance TR Symbols', url: 'https://www.binance.tr/open/v1/common/symbols' },
+      { name: 'Binance Vision API', url: 'https://data-api.binance.vision/api/v3/ping' },
+      { name: 'Binance Main API', url: 'https://api.binance.com/api/v3/ping' },
+      { name: 'Binance Data API', url: 'https://data.binance.com/api/v3/ping' },
+    ];
+
+    for (const target of targets) {
+      const start = Date.now();
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5000);
+        const r = await fetch(target.url, {
+          signal: controller.signal,
+          headers: {
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          }
+        });
+        clearTimeout(timeout);
+        results[target.name] = {
+          status: r.status,
+          ok: r.ok,
+          duration: Date.now() - start,
+          headers: {
+            'x-mbx-used-weight-1m': r.headers.get('x-mbx-used-weight-1m'),
+            'cf-ray': r.headers.get('cf-ray'), // Cloudflare info
+            'server': r.headers.get('server'),
+          }
+        };
+      } catch (e) {
+        results[target.name] = {
+          error: e instanceof Error ? e.message : String(e),
+          duration: Date.now() - start
+        };
+      }
+    }
+
+    res.json({
+      timestamp: new Date().toISOString(),
+      platform: process.platform,
+      nodeVersion: process.version,
+      env: {
+        VERCEL: process.env.VERCEL || 'false',
+        REGION: process.env.VERCEL_REGION || 'unknown'
+      },
+      results
+    });
+  }));
+
   app.get('/health', wrapAsync(async (_req, res) => {
     const connInfo = getSafeConnectionInfo();
     if (!dbState.ready) {
@@ -172,33 +223,65 @@ function createApp() {
       return res.json({ ok: true, quoteAsset, symbols: binanceTrSymbolsState.symbols });
     }
 
+    let symbols = [];
+    let fetchError = null;
+
+    // 1. Try Binance TR API
     try {
-      const r = await fetch('https://www.binance.tr/open/v1/common/symbols');
-      if (!r.ok) return res.json({ ok: false, quoteAsset, symbols: [], error: `HTTP ${r.status}` });
-      const body = await r.json();
-      const list = body?.data?.list;
-      if (!Array.isArray(list)) return res.json({ ok: false, quoteAsset, symbols: [], error: 'Invalid response' });
+      const r = await fetch('https://www.binance.tr/open/v1/common/symbols', {
+        headers: {
+          'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        }
+      });
+      if (r.ok) {
+        const body = await r.json();
+        const list = body?.data?.list;
+        if (Array.isArray(list)) {
+          symbols = list
+            .map((x) => (typeof x?.symbol === 'string' ? x.symbol : ''))
+            .map((s) => s.trim().toUpperCase())
+            .filter(Boolean)
+            .filter((s) => s.endsWith(`_${quoteAsset}`))
+            .map((s) => s.replace('_', ''));
+        }
+      } else {
+        fetchError = `Binance TR HTTP ${r.status}`;
+      }
+    } catch (e) {
+      fetchError = e instanceof Error ? e.message : String(e);
+    }
 
-      const symbols = list
-        .map((x) => (typeof x?.symbol === 'string' ? x.symbol : ''))
-        .map((s) => s.trim().toUpperCase())
-        .filter(Boolean)
-        .filter((s) => s.endsWith(`_${quoteAsset}`))
-        .map((s) => s.replace('_', ''));
+    // 2. Fallback to Global Binance API if TR fails or returns empty
+    if (symbols.length === 0) {
+      try {
+        const body = await fetchJsonFromBinance('/api/v3/exchangeInfo', null, 5000);
+        if (Array.isArray(body?.symbols)) {
+          symbols = body.symbols
+            .filter((s) => s.status === 'TRADING' && s.quoteAsset === quoteAsset)
+            .map((s) => s.symbol);
+        }
+      } catch (e) {
+        fetchError = (fetchError ? fetchError + ' | ' : '') + (e instanceof Error ? e.message : String(e));
+      }
+    }
 
+    if (symbols.length > 0) {
       binanceTrSymbolsState.expiresAtMs = now + 10 * 60_000;
       binanceTrSymbolsState.quoteAsset = quoteAsset;
       binanceTrSymbolsState.symbols = symbols;
-
       return res.json({ ok: true, quoteAsset, symbols });
-    } catch (e) {
-      return res.json({ ok: false, quoteAsset, symbols: [], error: e instanceof Error ? e.message : String(e) });
     }
+
+    return res.json({ ok: false, quoteAsset, symbols: [], error: fetchError || 'No symbols found' });
   });
 
   const BINANCE_HTTP_BASES = [
     'https://data-api.binance.vision',
     'https://api.binance.com',
+    'https://api1.binance.com',
+    'https://api2.binance.com',
+    'https://api3.binance.com',
+    'https://api4.binance.com',
     'https://data.binance.com',
   ];
 
