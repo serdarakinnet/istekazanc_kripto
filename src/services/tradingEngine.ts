@@ -164,7 +164,7 @@ const DEFAULTS: Required<
 > = {
   baseUrl: 'https://data-api.binance.vision',
   quoteAsset: 'TRY',
-  topNByQuoteVolume: 100,
+  topNByQuoteVolume: 200,
   excludeBases: [
     'USDT',
     'USDC',
@@ -180,7 +180,7 @@ const DEFAULTS: Required<
   pickTopK: 3,
   klineInterval: '1h',
   klineLimit: 200,
-  minRiskReward: 1.8,
+  minRiskReward: 1.5,
   concurrency: 5,
   timeoutMs: 12_000,
 };
@@ -719,15 +719,15 @@ function scoreCandidate(params: {
   longScore = Math.max(0, Math.min(100, Math.round(longScore)));
 
   let stop = Math.min(price - atr * 1.6, Math.min(...lows.slice(-20)) * 0.99);
-  stop = Math.max(stop, price * 0.92); 
-  stop = Math.min(stop, price * 0.98); 
+  stop = Math.max(stop, price * 0.90); 
+  stop = Math.min(stop, price * 0.95); 
   const longStop = Number(stop.toFixed(8));
 
   const risk = price - longStop;
   const longTarget = Number((price + risk * 2.5).toFixed(8));
   const longRR = risk > 0 ? Number(((longTarget - price) / risk).toFixed(2)) : 0;
 
-  const scoreOk = longScore >= 55;
+  const scoreOk = longScore >= 40;
 
   const breakdown: ScoreBreakdown = {
     freshCross: trendLong,

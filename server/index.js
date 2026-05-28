@@ -494,8 +494,8 @@ function createApp() {
       longScore = Math.max(0, Math.min(100, Math.round(longScore)));
 
       let stop = Math.min(price - atr * 1.6, Math.min(...lows.slice(-20)) * 0.99);
-      stop = Math.max(stop, price * 0.92); 
-      stop = Math.min(stop, price * 0.98); 
+      stop = Math.max(stop, price * 0.90); 
+      stop = Math.min(stop, price * 0.95); 
       const longStop = +stop.toFixed(6);
 
       const risk = price - longStop;
