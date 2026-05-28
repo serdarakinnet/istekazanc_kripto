@@ -118,7 +118,7 @@ async function isApiHealthy(timeoutMs: number): Promise<boolean> {
 
   apiHealthInFlight = (async () => {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), Math.min(1500, timeoutMs));
+    const timeout = setTimeout(() => controller.abort(), Math.min(5000, timeoutMs));
     try {
       const url = new URL('/health', API_BASE_URL);
       const res = await fetch(url.toString(), { signal: controller.signal });
