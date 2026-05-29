@@ -864,7 +864,7 @@ export async function runDeepFibonacciEngine(
 
   const universe = filterTopPairsByQuoteVolume(tickers, {
     ...merged,
-    topNByQuoteVolume: Math.min(120, merged.topNByQuoteVolume),
+    topNByQuoteVolume: Math.min(80, merged.topNByQuoteVolume),
   });
   const rejected: ScanResult['rejected'] = [];
 
@@ -873,7 +873,7 @@ export async function runDeepFibonacciEngine(
 
   const candidates = await mapWithConcurrency(
     universe,
-    Math.max(1, Math.min(4, merged.concurrency)),
+    Math.max(1, Math.min(3, merged.concurrency)),
     async (ticker) => {
       try {
         const klines = await fetchKlines(ticker.symbol, merged);
