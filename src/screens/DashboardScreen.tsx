@@ -15,6 +15,7 @@ import { useAppStore } from '../store/useAppStore';
 export function DashboardScreen() {
   const navigation = useNavigation<any>();
   const reports = useAppStore((s) => s.reports);
+  const refreshReportsFromServer = useAppStore((s) => s.refreshReportsFromServer);
   const rawMinRiskReward = useAppStore((s) => s.settings.minRiskReward);
   const autoTradeEnabled = useAppStore((s) => s.settings.autoTradeEnabled);
   const watchlist = useAppStore((s) => s.watchlist);
@@ -123,7 +124,9 @@ export function DashboardScreen() {
       if (r.outcome === 'TP') wins++;
       if (Number.isFinite(r.pnlPct)) netPnlPct += r.pnlPct;
     }
-    return { total, wins, losses: total - wins, netPnlPct };
+    const winRate = total > 0 ? (wins / total) * 100 : 0;
+    const avgPnlPct = total > 0 ? netPnlPct / total : 0;
+    return { total, wins, losses: total - wins, winRate, netPnlPct, avgPnlPct };
   }, [todayReports]);
 
   type Row =
@@ -172,6 +175,10 @@ export function DashboardScreen() {
     };
   }, [autoTradeEnabled, symbols.join('|')]);
 
+  React.useEffect(() => {
+    void refreshReportsFromServer();
+  }, [refreshReportsFromServer]);
+
   return (
     <SafeAreaView className="flex-1 bg-bg-950">
       <View className="absolute inset-0">
@@ -184,57 +191,6 @@ export function DashboardScreen() {
         contentContainerStyle={{ paddingTop: 16, paddingBottom: 100 }}
         ListHeaderComponent={
           <View className="px-6">
-            <View className="mb-6 rounded-2xl border border-outline-500/35 bg-bg-900/60 p-4">
-              <View className="flex-row items-center justify-between border-b border-outline-500/20 pb-3">
-                <View>
-                  <Text className="text-xs font-medium text-gray-400">Son 24 Saat Performansı</Text>
-                  <View className="mt-1 flex-row items-baseline gap-2">
-                    <Text className={`text-2xl font-bold ${todayStats.netPnlPct >= 0 ? 'text-neon-green' : 'text-neon-red'}`}>
-                      {todayStats.netPnlPct > 0 ? '+' : ''}{todayStats.netPnlPct.toFixed(2)}%
-                    </Text>
-                    <Text className="text-xs text-gray-500">
-                      ({todayStats.wins} TP / {todayStats.losses} SL)
-                    </Text>
-                  </View>
-                </View>
-                <Pressable
-                  onPress={() => navigation.navigate('Reports')}
-                  className="flex-row items-center rounded-lg bg-bg-950/50 px-3 py-2 border border-outline-500/20"
-                >
-                  <Text className="text-xs font-semibold text-gray-300 mr-1">Raporlar</Text>
-                  <ChevronRight size={14} color="#d1d5db" />
-                </Pressable>
-              </View>
-
-              <View className="pt-3">
-                {todayReports.length === 0 ? (
-                  <Text className="py-2 text-center text-xs text-gray-500">Son 24 saatte işlem bulunmuyor.</Text>
-                ) : (
-                  todayReports.slice(0, 3).map((r, i) => {
-                    const isWin = r.outcome === 'TP';
-                    return (
-                      <View key={r.id} className={`flex-row items-center justify-between ${i !== 0 ? 'mt-3' : ''}`}>
-                        <View className="flex-row items-center gap-2">
-                          <View className={`rounded-full p-1.5 ${isWin ? 'bg-neon-green/10' : 'bg-neon-red/10'}`}>
-                            {isWin ? <TrendingUp size={14} color="#00ff9d" /> : <TrendingDown size={14} color="#ff3366" />}
-                          </View>
-                          <Text className="text-[15px] font-semibold text-gray-200">{r.symbol}</Text>
-                        </View>
-                        <View className="items-end">
-                          <Text className={`text-sm font-semibold ${isWin ? 'text-neon-green' : 'text-neon-red'}`}>
-                            {isWin ? '+' : ''}{r.pnlPct.toFixed(2)}%
-                          </Text>
-                          <Text className="text-[10px] text-gray-500">
-                            {new Date(r.closedAtMs).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}
-                          </Text>
-                        </View>
-                      </View>
-                    );
-                  })
-                )}
-              </View>
-            </View>
-
             {/* Section header */}
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
               <View style={{ flex: 1, paddingRight: 12 }}>
@@ -297,6 +253,10 @@ export function DashboardScreen() {
                   borderColor: 'rgba(66,70,86,0.4)',
                   backgroundColor: 'rgba(17,24,46,0.6)',
                   padding: 12,
+                  minWidth: 48,
+                  minHeight: 48,
+                  alignItems: 'center',
+                  justifyContent: 'center',
                 }}
                 accessibilityLabel="Yenile"
               >
@@ -344,6 +304,63 @@ export function DashboardScreen() {
                 </View>
               </View>
             ) : null}
+          </View>
+        }
+        ListFooterComponent={
+          <View className="px-6 pt-4 pb-8">
+            <View className="rounded-2xl border border-outline-500/35 bg-bg-900/60 p-4">
+              <View className="flex-row items-center justify-between border-b border-outline-500/20 pb-3">
+                <View>
+                  <Text className="text-xs font-medium text-gray-400">Son 24 Saat Performansı</Text>
+                  <View className="mt-1 flex-row items-baseline gap-2">
+                    <Text className={`text-2xl font-bold ${todayStats.netPnlPct >= 0 ? 'text-neon-green' : 'text-neon-red'}`}>
+                      {todayStats.netPnlPct > 0 ? '+' : ''}{todayStats.netPnlPct.toFixed(2)}%
+                    </Text>
+                    <Text className="text-xs text-gray-500">
+                      {todayStats.total} işlem • {todayStats.winRate.toFixed(1)}% WR
+                    </Text>
+                  </View>
+                  <Text className="mt-1 text-[11px] text-gray-500">
+                    {todayStats.wins} TP / {todayStats.losses} SL • Ortalama {todayStats.avgPnlPct >= 0 ? '+' : ''}{todayStats.avgPnlPct.toFixed(2)}%
+                  </Text>
+                </View>
+                <Pressable
+                  onPress={() => navigation.navigate('Reports')}
+                  className="flex-row items-center rounded-lg bg-bg-950/50 px-4 py-3 min-h-12 border border-outline-500/20"
+                >
+                  <Text className="text-xs font-semibold text-gray-300 mr-1">Raporlar</Text>
+                  <ChevronRight size={14} color="#d1d5db" />
+                </Pressable>
+              </View>
+
+              <View className="pt-3">
+                {todayReports.length === 0 ? (
+                  <Text className="py-2 text-center text-xs text-gray-500">Son 24 saatte rapor yok.</Text>
+                ) : (
+                  todayReports.slice(0, 4).map((r, i) => {
+                    const isWin = r.outcome === 'TP';
+                    return (
+                      <View key={r.id} className={`flex-row items-center justify-between ${i !== 0 ? 'mt-3' : ''}`}>
+                        <View className="flex-row items-center gap-2">
+                          <View className={`rounded-full p-1.5 ${isWin ? 'bg-neon-green/10' : 'bg-neon-red/10'}`}>
+                            {isWin ? <TrendingUp size={14} color="#00ff9d" /> : <TrendingDown size={14} color="#ff3366" />}
+                          </View>
+                          <Text className="text-[15px] font-semibold text-gray-200">{r.symbol}</Text>
+                        </View>
+                        <View className="items-end">
+                          <Text className={`text-sm font-semibold ${isWin ? 'text-neon-green' : 'text-neon-red'}`}>
+                            {isWin ? '+' : ''}{r.pnlPct.toFixed(2)}%
+                          </Text>
+                          <Text className="text-[10px] text-gray-500">
+                            {new Date(r.closedAtMs).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}
+                          </Text>
+                        </View>
+                      </View>
+                    );
+                  })
+                )}
+              </View>
+            </View>
           </View>
         }
         renderItem={({ item }) => {

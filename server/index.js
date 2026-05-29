@@ -1130,6 +1130,9 @@ function createApp() {
     const userId = String(req.params.userId || '').trim();
     if (!userId) return res.json([]);
 
+    const sinceMsRaw = typeof req.query?.sinceMs === 'string' ? Number(req.query.sinceMs) : Number.NaN;
+    const sinceMs = Number.isFinite(sinceMsRaw) ? Math.max(0, Math.trunc(sinceMsRaw)) : null;
+
     const result = await pool.query(
       `
         SELECT *
@@ -1148,11 +1151,12 @@ function createApp() {
             created_at_ms as "createdAtMs"
           FROM trade_reports
           WHERE user_id = $1::uuid
+            AND ($2::bigint IS NULL OR closed_at_ms >= $2::bigint)
           ORDER BY symbol, opened_at_ms, outcome, closed_at_ms DESC
         ) t
         ORDER BY t."closedAtMs" DESC
       `,
-      [userId],
+      [userId, sinceMs],
     );
 
     res.json(
@@ -1170,6 +1174,13 @@ function createApp() {
         createdAtMs: Number(r.createdAtMs),
       })),
     );
+  }));
+
+  app.delete('/users/:userId/reports', wrapAsync(async (req, res) => {
+    const userId = String(req.params.userId || '').trim();
+    if (!userId) return errorResponse(res, 400, 'Kullanıcı bulunamadı.');
+    await pool.query('DELETE FROM trade_reports WHERE user_id = $1::uuid', [userId]);
+    return res.json({ ok: true });
   }));
 
   app.post('/users/:userId/reports', wrapAsync(async (req, res) => {

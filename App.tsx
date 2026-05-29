@@ -143,6 +143,7 @@ function BotSupervisor() {
 
 export default function App() {
   const hydrateSecure = useAppStore((s) => s.hydrateSecure);
+  const resetReportsDatasetIfNeeded = useAppStore((s) => s.resetReportsDatasetIfNeeded);
   const [globalError, setGlobalError] = React.useState<{ message: string; stack?: string } | null>(
     null,
   );
@@ -151,6 +152,10 @@ export default function App() {
     initUserDb();
     hydrateSecure();
   }, [hydrateSecure]);
+
+  useEffect(() => {
+    void resetReportsDatasetIfNeeded();
+  }, [resetReportsDatasetIfNeeded]);
 
   useEffect(() => {
     if (Platform.OS !== 'web') return;

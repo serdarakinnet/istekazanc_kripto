@@ -236,12 +236,21 @@ export async function replaceUserPositions(params: {
   });
 }
 
-export async function getUserReports(userId: string): Promise<TradeReportRecord[]> {
+export async function getUserReports(userId: string, params?: { sinceMs?: number }): Promise<TradeReportRecord[]> {
   const trimmedUserId = userId.trim();
   if (!trimmedUserId) return [];
-  return await apiRequest<TradeReportRecord[]>(`/users/${encodeURIComponent(trimmedUserId)}/reports`, {
+  const sinceMsRaw = params?.sinceMs;
+  const sinceMs = Number.isFinite(Number(sinceMsRaw)) ? Math.max(0, Math.trunc(Number(sinceMsRaw))) : null;
+  const qs = sinceMs === null ? '' : `?sinceMs=${encodeURIComponent(String(sinceMs))}`;
+  return await apiRequest<TradeReportRecord[]>(`/users/${encodeURIComponent(trimmedUserId)}/reports${qs}`, {
     method: 'GET',
   });
+}
+
+export async function deleteUserReports(userId: string): Promise<void> {
+  const trimmedUserId = userId.trim();
+  if (!trimmedUserId) throw new Error('Kullanıcı bulunamadı.');
+  await apiRequest<{ ok: true }>(`/users/${encodeURIComponent(trimmedUserId)}/reports`, { method: 'DELETE' });
 }
 
 export async function appendUserReports(params: {

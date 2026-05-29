@@ -13,6 +13,7 @@ import {
 import {
   appendUserReports,
   createUser,
+  deleteUserReports,
   getUserApiCredentials,
   getUserPositions,
   getUserReports,
@@ -57,12 +58,15 @@ type AppState = {
   lastScanMs: number | null;
   positions: ActivePosition[];
   reports: TradeReport[];
+  reportsResetAtMs: number;
+  reportsNeedsRemoteReset: boolean;
   scanPool: ScannedCandidate[];
   scanPoolUpdatedAtMs: number | null;
   recentlyClosedSymbols: Record<string, number>;
   settings: AppSettings;
   setLocalHydrated: (hydrated: boolean) => void;
   hydrateSecure: () => Promise<void>;
+  resetReportsDatasetIfNeeded: () => Promise<void>;
   signInWithEmail: (params: { email: string; password: string }) => Promise<void>;
   signUpWithEmail: (params: { email: string; password: string; displayName?: string }) => Promise<void>;
   signOut: () => void;
@@ -83,6 +87,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   autoTradeEnabled: false,
   minRiskReward: 1.5,
 };
+
+const REPORTS_DATASET_VERSION = 2;
 
 function makeLocalId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -279,6 +285,8 @@ export const useAppStore = create<AppState>()(
       lastScanMs: null,
       positions: [],
       reports: [],
+      reportsResetAtMs: 0,
+      reportsNeedsRemoteReset: false,
       scanPool: [],
       scanPoolUpdatedAtMs: null,
       recentlyClosedSymbols: {},
@@ -286,6 +294,19 @@ export const useAppStore = create<AppState>()(
 
       setLocalHydrated: (hydrated) => {
         set({ hasLocalHydrated: hydrated });
+      },
+
+      resetReportsDatasetIfNeeded: async () => {
+        const state = get();
+        const userId = state.user?.id;
+        if (!state.isSignedIn || !userId) return;
+        if (!state.reportsNeedsRemoteReset) return;
+        const now = Date.now();
+        try {
+          await deleteUserReports(userId);
+        } catch {
+        }
+        set({ reports: [], reportsNeedsRemoteReset: false, reportsResetAtMs: now });
       },
 
       hydrateSecure: async () => {
@@ -318,12 +339,28 @@ export const useAppStore = create<AppState>()(
 
       signInWithEmail: async ({ email, password }) => {
         const user = await verifyLogin({ email, password });
-        const [settingsRow, positionsRows, reportsRows, apiCredsRow] = await Promise.all([
+        const resetAtMs = get().reportsResetAtMs;
+        const needsRemoteReset = get().reportsNeedsRemoteReset;
+        const now = Date.now();
+
+        const [settingsRow, positionsRows, apiCredsRow] = await Promise.all([
           getUserSettings(user.id),
           getUserPositions(user.id),
-          getUserReports(user.id),
           getUserApiCredentials(user.id),
         ]);
+
+        if (needsRemoteReset) {
+          try {
+            await deleteUserReports(user.id);
+          } catch {
+          }
+          set({ reportsNeedsRemoteReset: false, reportsResetAtMs: now });
+        }
+
+        const effectiveResetAtMs = needsRemoteReset ? now : resetAtMs;
+        const reportsRows = await getUserReports(user.id, {
+          sinceMs: effectiveResetAtMs > 0 ? effectiveResetAtMs : undefined,
+        });
 
         const settings: AppSettings = settingsRow
           ? {
@@ -560,13 +597,16 @@ export const useAppStore = create<AppState>()(
 
       appendReports: (items) => {
         if (items.length === 0) return;
+        const resetAtMs = get().reportsResetAtMs;
+        const filtered = resetAtMs > 0 ? items.filter((r) => Number(r.closedAtMs) >= resetAtMs) : items;
+        if (filtered.length === 0) return;
         const current = get().reports;
-        const next = mergeReportsById(current, items);
+        const next = mergeReportsById(current, filtered);
         set({ reports: next });
 
         const userId = get().user?.id;
         if (userId) {
-          void queuePendingSync(userId, { reports: items }).then(async () => {
+          void queuePendingSync(userId, { reports: filtered }).then(async () => {
             const pending = await readPendingForUser(userId);
             if (!pending?.reports || pending.reports.length === 0) return;
             try {
@@ -596,7 +636,9 @@ export const useAppStore = create<AppState>()(
         const userId = state.user?.id;
         if (!state.isSignedIn || !userId) return;
         try {
-          const rows = await getUserReports(userId);
+          const rows = await getUserReports(userId, {
+            sinceMs: state.reportsResetAtMs > 0 ? state.reportsResetAtMs : undefined,
+          });
           const fromServer: TradeReport[] = rows.map((r) => ({
             id: String(r.id),
             symbol: String(r.symbol),
@@ -703,7 +745,17 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: 'bist-app',
+      version: REPORTS_DATASET_VERSION,
       storage: createJSONStorage(() => AsyncStorage),
+      migrate: (persisted, version) => {
+        const base = (persisted ?? {}) as Record<string, unknown>;
+        if (version >= REPORTS_DATASET_VERSION) return base;
+        return {
+          ...base,
+          reportsResetAtMs: Date.now(),
+          reportsNeedsRemoteReset: true,
+        };
+      },
       partialize: (state) => ({
         isSignedIn: state.isSignedIn,
         user: state.user,
@@ -712,6 +764,8 @@ export const useAppStore = create<AppState>()(
         positions: state.positions,
         settings: state.settings,
         recentlyClosedSymbols: state.recentlyClosedSymbols,
+        reportsResetAtMs: state.reportsResetAtMs,
+        reportsNeedsRemoteReset: state.reportsNeedsRemoteReset,
       }),
       onRehydrateStorage: () => (state) => {
         state?.setLocalHydrated(true);

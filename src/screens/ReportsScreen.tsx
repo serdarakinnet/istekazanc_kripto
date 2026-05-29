@@ -1,6 +1,7 @@
 import * as React from 'react';
-import { Pressable, RefreshControl, SectionList, Text, View } from 'react-native';
+import { Pressable, RefreshControl, ScrollView, SectionList, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import Svg, { Line, Rect } from 'react-native-svg';
 
 import type { TradeReport } from '../store/useAppStore';
 import { useAppStore } from '../store/useAppStore';
@@ -34,17 +35,6 @@ function computeStats(items: TradeReport[]) {
   const winRate = total > 0 ? (wins / total) * 100 : 0;
   const netPnlPct = items.reduce((acc, r) => acc + (Number.isFinite(r.pnlPct) ? r.pnlPct : 0), 0);
   const avgPnlPct = total > 0 ? netPnlPct / total : 0;
-  const grossProfit = items.reduce(
-    (acc, r) => acc + (Number.isFinite(r.pnlPct) && r.pnlPct > 0 ? r.pnlPct : 0),
-    0,
-  );
-  const grossLoss = items.reduce(
-    (acc, r) => acc + (Number.isFinite(r.pnlPct) && r.pnlPct < 0 ? Math.abs(r.pnlPct) : 0),
-    0,
-  );
-  const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? 99 : 0;
-  const best = items.reduce((m, r) => (Number.isFinite(r.pnlPct) ? Math.max(m, r.pnlPct) : m), -Infinity);
-  const worst = items.reduce((m, r) => (Number.isFinite(r.pnlPct) ? Math.min(m, r.pnlPct) : m), Infinity);
   return {
     total,
     wins,
@@ -52,9 +42,6 @@ function computeStats(items: TradeReport[]) {
     winRate,
     netPnlPct,
     avgPnlPct,
-    profitFactor,
-    best: Number.isFinite(best) ? best : 0,
-    worst: Number.isFinite(worst) ? worst : 0,
   };
 }
 
@@ -71,7 +58,7 @@ function Tab({
     <Pressable
       onPress={onPress}
       className={[
-        'flex-1 rounded-xl px-3 py-3',
+        'flex-1 rounded-xl px-3 py-3 min-h-12',
         active ? 'bg-bg-900/60 border border-outline-500/35' : 'bg-transparent border border-transparent',
       ].join(' ')}
     >
@@ -105,6 +92,114 @@ function StatCard({
       <Text className="text-xs text-gray-500">{label}</Text>
       <Text className={['mt-2 text-xl font-semibold', toneClass].join(' ')}>{value}</Text>
       {caption ? <Text className="mt-1 text-[11px] text-gray-500">{caption}</Text> : null}
+    </View>
+  );
+}
+
+type PnlBucket = {
+  label: string;
+  pnlPct: number;
+};
+
+function buildPnlBuckets(items: TradeReport[], range: RangeKey): PnlBucket[] {
+  const now = Date.now();
+  const buckets: PnlBucket[] = [];
+
+  if (range === 'day') {
+    const endHour = Math.floor(now / 3_600_000) * 3_600_000;
+    for (let i = 23; i >= 0; i -= 1) {
+      const start = endHour - i * 3_600_000;
+      const end = start + 3_600_000;
+      let pnl = 0;
+      for (const r of items) {
+        if (r.closedAtMs >= start && r.closedAtMs < end) pnl += r.pnlPct;
+      }
+      const dt = new Date(start);
+      const hh = String(dt.getHours()).padStart(2, '0');
+      buckets.push({ label: `${hh}:00`, pnlPct: pnl });
+    }
+    return buckets;
+  }
+
+  const days = range === 'week' ? 7 : 30;
+  const endDay = new Date(now);
+  endDay.setHours(0, 0, 0, 0);
+  const endMs = endDay.getTime();
+  for (let i = days - 1; i >= 0; i -= 1) {
+    const start = endMs - i * 86_400_000;
+    const end = start + 86_400_000;
+    let pnl = 0;
+    for (const r of items) {
+      if (r.closedAtMs >= start && r.closedAtMs < end) pnl += r.pnlPct;
+    }
+    const dt = new Date(start);
+    buckets.push({
+      label: dt.toLocaleDateString('tr-TR', { day: '2-digit', month: 'short' }),
+      pnlPct: pnl,
+    });
+  }
+  return buckets;
+}
+
+function PnlChart({ buckets }: { buckets: PnlBucket[] }) {
+  const [selectedIndex, setSelectedIndex] = React.useState<number | null>(null);
+  const selected = selectedIndex === null ? null : buckets[selectedIndex] ?? null;
+
+  const maxAbs = React.useMemo(() => {
+    let m = 0;
+    for (const b of buckets) m = Math.max(m, Math.abs(b.pnlPct));
+    return m > 0 ? m : 1;
+  }, [buckets]);
+
+  const barW = 18;
+  const gap = 10;
+  const h = 140;
+  const midY = h / 2;
+  const width = Math.max(1, buckets.length) * (barW + gap);
+
+  return (
+    <View className="mt-6 rounded-2xl border border-outline-500/35 bg-bg-900/60 p-4">
+      <View className="flex-row items-start justify-between">
+        <View className="flex-1 pr-3">
+          <Text className="text-sm font-semibold text-gray-100">Kazanç / Kayıp Grafiği</Text>
+          <Text className="mt-1 text-xs text-gray-500">Kaydırarak dönemleri inceleyin.</Text>
+        </View>
+        {selected ? (
+          <View className="items-end">
+            <Text className="text-[11px] text-gray-500">{selected.label}</Text>
+            <Text className={['mt-1 text-sm font-semibold', selected.pnlPct >= 0 ? 'text-neon-green' : 'text-neon-red'].join(' ')}>
+              {formatPct(selected.pnlPct)}
+            </Text>
+          </View>
+        ) : null}
+      </View>
+
+      <View className="mt-4 overflow-hidden rounded-xl border border-outline-500/20 bg-bg-950/40">
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 12, paddingVertical: 10 }}>
+          <Svg width={width} height={h}>
+            <Line x1={0} y1={midY} x2={width} y2={midY} stroke="rgba(148,163,184,0.25)" strokeWidth={1} />
+            {buckets.map((b, i) => {
+              const x = i * (barW + gap);
+              const v = b.pnlPct;
+              const barH = Math.max(2, (Math.abs(v) / maxAbs) * (h / 2 - 10));
+              const y = v >= 0 ? midY - barH : midY;
+              const fill = v >= 0 ? 'rgba(0,255,157,0.85)' : 'rgba(255,51,102,0.85)';
+              return (
+                <Rect
+                  key={`${b.label}-${i}`}
+                  x={x}
+                  y={y}
+                  width={barW}
+                  height={barH}
+                  rx={6}
+                  fill={fill}
+                  onPress={() => setSelectedIndex(i)}
+                />
+              );
+            })}
+          </Svg>
+        </ScrollView>
+      </View>
     </View>
   );
 }
@@ -179,6 +274,7 @@ function ReportRow({ item }: { item: TradeReport }) {
 export function ReportsScreen() {
   const reports = useAppStore((s) => s.reports);
   const refreshReportsFromServer = useAppStore((s) => s.refreshReportsFromServer);
+  const reportsResetAtMs = useAppStore((s) => s.reportsResetAtMs);
   const [range, setRange] = React.useState<RangeKey>('day');
   const [refreshing, setRefreshing] = React.useState(false);
 
@@ -204,6 +300,7 @@ export function ReportsScreen() {
   }, [now, range, reports]);
 
   const stats = React.useMemo(() => computeStats(filtered), [filtered]);
+  const buckets = React.useMemo(() => buildPnlBuckets(filtered, range), [filtered, range]);
   const sections = React.useMemo(() => {
     const byDay = new Map<string, TradeReport[]>();
     for (const r of filtered) {
@@ -260,9 +357,13 @@ export function ReportsScreen() {
             <View className="flex-row items-start justify-between">
               <View className="flex-1 pr-4">
                 <Text className="text-2xl font-semibold text-gray-100">Raporlar</Text>
-                <Text className="mt-2 text-sm text-gray-400">
-                  Gerçekleşen TP/SL kapanışları, performans özeti ve işlem geçmişi.
-                </Text>
+                <Text className="mt-2 text-sm text-gray-400">Son işlemler ve performans özeti.</Text>
+                {reportsResetAtMs > 0 ? (
+                  <Text className="mt-2 text-xs text-gray-500">
+                    Temizlik tarihi:{' '}
+                    {new Date(reportsResetAtMs).toLocaleString('tr-TR', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                  </Text>
+                ) : null}
               </View>
             </View>
 
@@ -274,9 +375,9 @@ export function ReportsScreen() {
 
             <View className="mt-5 flex-row gap-3">
               <StatCard
-                label="Win Rate"
-                value={`${stats.winRate.toFixed(1)}%`}
-                caption={`${stats.wins}/${stats.total} işlem`}
+                label="İşlem"
+                value={`${stats.total}`}
+                caption={`${stats.wins} TP • ${stats.losses} SL`}
               />
               <StatCard
                 label="Net PnL"
@@ -288,20 +389,24 @@ export function ReportsScreen() {
 
             <View className="mt-3 flex-row gap-3">
               <StatCard
-                label="Profit Factor"
-                value={stats.profitFactor === 99 ? '∞' : stats.profitFactor.toFixed(2)}
-                caption={`${stats.wins} TP • ${stats.losses} SL`}
+                label="Win Rate"
+                value={`${stats.winRate.toFixed(1)}%`}
+                tone={stats.winRate >= 50 ? 'good' : 'default'}
+                caption={`Aralık: ${range === 'day' ? 'Günlük' : range === 'week' ? 'Haftalık' : 'Aylık'}`}
               />
               <StatCard
-                label="Best / Worst"
-                value={`${formatPct(stats.best)} / ${formatPct(stats.worst)}`}
-                caption={`Aralık: ${range === 'day' ? 'Günlük' : range === 'week' ? 'Haftalık' : 'Aylık'}`}
+                label="Ortalama"
+                value={formatPct(stats.avgPnlPct)}
+                tone={stats.avgPnlPct >= 0 ? 'good' : 'bad'}
+                caption="İşlem başına"
               />
             </View>
 
+            <PnlChart buckets={buckets} />
+
             {filtered.length === 0 ? (
               <View className="mt-6 rounded-2xl border border-outline-500/35 bg-bg-900/60 p-4">
-                <Text className="text-sm text-gray-400">Bu aralıkta kapanmış işlem yok.</Text>
+                <Text className="text-sm text-gray-400">Bu aralıkta rapor bulunmuyor.</Text>
               </View>
             ) : (
               <View className="mt-6" />
