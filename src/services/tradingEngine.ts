@@ -48,6 +48,13 @@ export type ScoreBreakdown = {
 export type ScannedCandidate = {
   symbol: string;
   score: number;
+  tier?: 'A' | 'B' | 'C';
+  action?: 'BUY' | 'WATCHLIST';
+  tradeEligible?: boolean;
+  reasons?: string[];
+  warnings?: string[];
+  hitRules?: string;
+  scoreDetail?: string;
   scoreBreakdown: ScoreBreakdown;
   entry: number;
   target: number;
@@ -57,8 +64,28 @@ export type ScannedCandidate = {
   lastChangePercent: number;
   ema5: number;
   ema21: number;
+  ema55?: number;
   ema144: number;
+  e5?: number;
+  e21?: number;
+  e55?: number;
+  e144?: number;
+  rsi?: number;
+  macdHist?: number | null;
+  atr?: number;
   volMult: number;
+  validCrossWindow?: boolean;
+  crossTooOld?: boolean;
+  lateEntryTrap?: boolean;
+  postCrossPumpDetected?: boolean;
+  postCrossBarsAnalyzed?: number;
+  moveSinceCrossPct?: number;
+  maxPostCrossVolMult?: number;
+  maxPostCrossCandlePct?: number;
+  maxPostCrossRangePct?: number;
+  currentCandleTooAggressive?: boolean;
+  moveSinceCrossTooHigh?: boolean;
+  priceTooFarAfterCross?: boolean;
 };
 
 export type ScanResult = {
@@ -71,6 +98,9 @@ export type ScanResult = {
       | 'no-klines'
       | 'not-enough-data'
       | 'trend-failed'
+      | 'cross-too-old'
+      | 'late-entry-trap'
+      | 'pump'
       | 'rr-too-low'
       | 'invalid-risk'
       | 'entry-failed'
@@ -217,6 +247,8 @@ const DEFAULTS: Required<
   concurrency: 5,
   timeoutMs: 12_000,
 };
+
+type ResolvedScanOptions = typeof DEFAULTS & { customStrategyCode?: string };
 
 async function fetchBinanceTrAllowedSymbols(params: {
   quoteAsset: string;
@@ -935,7 +967,7 @@ export async function runDeepFibonacciEngine(
   tickers: BinanceTicker24h[],
   options?: ScanOptions,
 ): Promise<ScanResult> {
-  const merged: Required<ScanOptions> = {
+  const merged: ResolvedScanOptions = {
     baseUrl: options?.baseUrl ?? DEFAULTS.baseUrl,
     quoteAsset: options?.quoteAsset ?? DEFAULTS.quoteAsset,
     topNByQuoteVolume: options?.topNByQuoteVolume ?? DEFAULTS.topNByQuoteVolume,
@@ -947,6 +979,7 @@ export async function runDeepFibonacciEngine(
     minRiskReward: options?.minRiskReward ?? DEFAULTS.minRiskReward,
     concurrency: options?.concurrency ?? DEFAULTS.concurrency,
     timeoutMs: options?.timeoutMs ?? DEFAULTS.timeoutMs,
+    customStrategyCode: options?.customStrategyCode,
   };
 
   if (Platform.OS === 'web') {
@@ -959,7 +992,7 @@ export async function runDeepFibonacciEngine(
 
   const desired = Math.max(1, Math.trunc(merged.pickTopK));
 
-  const candidates = await mapWithConcurrency(
+  const candidates = await mapWithConcurrency<BinanceTicker24h, ScannedCandidate | null>(
     universe,
     Math.max(1, merged.concurrency),
     async (ticker) => {
@@ -993,7 +1026,7 @@ export async function runDeepFibonacciEngine(
         const atr = calcAtrV65(highs, lows, closes, 14);
         const macd = calcMacdV65(closes);
 
-        if ([e5, e21, e55, rsi, atr].some((v) => v == null) || !macd) {
+        if (e5 == null || e21 == null || e55 == null || e144 == null || rsi == null || atr == null || macd == null) {
           rejected.push({ symbol: ticker.symbol, reason: 'not-enough-data' });
           return null;
         }
@@ -1055,9 +1088,9 @@ export async function runDeepFibonacciEngine(
           lastChangePercent,
           ema5: Number(e5.toFixed(6)),
           ema21: Number(e21.toFixed(6)),
-          ema144: Number((e144 ?? 0).toFixed(6)),
+          ema144: Number(e144.toFixed(6)),
           volMult,
-        } satisfies ScannedCandidate;
+        };
       } catch {
         rejected.push({ symbol: ticker.symbol, reason: 'network' });
         return null;
@@ -1081,7 +1114,7 @@ function buildLiteCandidatesFromTickers(
   tickers: BinanceTicker24h[],
   options?: ScanOptions,
 ): ScanResult {
-  const merged: Required<ScanOptions> = {
+  const merged: ResolvedScanOptions = {
     baseUrl: options?.baseUrl ?? DEFAULTS.baseUrl,
     quoteAsset: options?.quoteAsset ?? DEFAULTS.quoteAsset,
     topNByQuoteVolume: options?.topNByQuoteVolume ?? DEFAULTS.topNByQuoteVolume,
@@ -1093,6 +1126,7 @@ function buildLiteCandidatesFromTickers(
     minRiskReward: options?.minRiskReward ?? DEFAULTS.minRiskReward,
     concurrency: options?.concurrency ?? DEFAULTS.concurrency,
     timeoutMs: options?.timeoutMs ?? DEFAULTS.timeoutMs,
+    customStrategyCode: options?.customStrategyCode,
   };
 
   const universe = filterTopPairsByQuoteVolume(tickers, merged);

@@ -68,6 +68,77 @@ function dbUnavailable(res) {
   return errorResponse(res, 503, 'Veritabanına bağlanılamadı.');
 }
 
+function normalizeQuoteAsset(value) {
+  return String(value || '').trim().toUpperCase();
+}
+
+function normalizeSymbol(value) {
+  return String(value || '').trim().toUpperCase();
+}
+
+function httpError(status, message, details) {
+  const e = new Error(message);
+  e.status = status;
+  e.details = details;
+  return e;
+}
+
+function assertQuoteAssetTry(quoteAsset) {
+  const qa = normalizeQuoteAsset(quoteAsset);
+  if (qa !== 'TRY') {
+    throw httpError(400, 'Sadece quoteAsset=TRY desteklenir.', { quoteAsset: qa });
+  }
+}
+
+function assertSymbolTryPair(symbol) {
+  const sym = normalizeSymbol(symbol);
+  if (!sym.endsWith('TRY')) {
+    throw httpError(400, 'Sadece TRY pariteleri desteklenir.', { symbol: sym });
+  }
+}
+
+function validateBinanceKlinesArray(klines) {
+  if (!Array.isArray(klines)) {
+    return { ok: false, error: 'klines array olmalı.' };
+  }
+  if (klines.length === 0) {
+    return { ok: false, error: 'klines boş olamaz.' };
+  }
+
+  for (let i = 0; i < klines.length; i += 1) {
+    const k = klines[i];
+    if (!Array.isArray(k)) {
+      return { ok: false, error: 'kline array formatında olmalı.', index: i };
+    }
+    if (k.length < 11) {
+      return { ok: false, error: 'kline formatı eksik (en az 11 alan).', index: i, length: k.length };
+    }
+
+    const openTime = Number(k[0]);
+    const open = Number(k[1]);
+    const high = Number(k[2]);
+    const low = Number(k[3]);
+    const close = Number(k[4]);
+    const volume = Number(k[5]);
+    const closeTime = Number(k[6]);
+
+    if (!Number.isFinite(openTime) || openTime <= 0) return { ok: false, error: 'openTime geçersiz.', index: i };
+    if (!Number.isFinite(closeTime) || closeTime <= 0) return { ok: false, error: 'closeTime geçersiz.', index: i };
+
+    if (!Number.isFinite(open) || open <= 0) return { ok: false, error: 'open geçersiz.', index: i };
+    if (!Number.isFinite(high) || high <= 0) return { ok: false, error: 'high geçersiz.', index: i };
+    if (!Number.isFinite(low) || low <= 0) return { ok: false, error: 'low geçersiz.', index: i };
+    if (!Number.isFinite(close) || close <= 0) return { ok: false, error: 'close geçersiz.', index: i };
+    if (!Number.isFinite(volume) || volume < 0) return { ok: false, error: 'volume geçersiz.', index: i };
+
+    if (high < Math.max(open, close) || low > Math.min(open, close) || high < low) {
+      return { ok: false, error: 'OHLC tutarsız.', index: i };
+    }
+  }
+
+  return { ok: true };
+}
+
 function createApp() {
   const dbState = { ready: false, lastError: null };
   let initPromise = null;
@@ -246,6 +317,12 @@ function createApp() {
     const quoteAsset = (quoteAssetRaw || 'TRY').trim().toUpperCase();
     const now = nowMs();
 
+    try {
+      assertQuoteAssetTry(quoteAsset);
+    } catch (e) {
+      return errorResponse(res, e?.status || 400, e instanceof Error ? e.message : 'Geçersiz quoteAsset.');
+    }
+
     if (binanceTrSymbolsState.expiresAtMs > now && binanceTrSymbolsState.quoteAsset === quoteAsset) {
       return res.json({ ok: true, quoteAsset, symbols: binanceTrSymbolsState.symbols });
     }
@@ -253,41 +330,29 @@ function createApp() {
     let symbols = [];
     let fetchError = null;
 
-    // 1. Try Binance Vision API first (most resilient for Vercel/US regions)
     try {
-      const body = await fetchJsonFromBinance('/api/v3/exchangeInfo', null, 5000);
-      if (Array.isArray(body?.symbols)) {
-        symbols = body.symbols
-          .filter((s) => s.status === 'TRADING' && s.quoteAsset === quoteAsset)
-          .map((s) => s.symbol);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+      const r = await fetch('https://www.binance.tr/open/v1/common/symbols', {
+        signal: controller.signal,
+        headers: {
+          'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        }
+      });
+      clearTimeout(timeout);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const body = await r.json();
+      const list = body?.data?.list;
+      if (Array.isArray(list)) {
+        symbols = list
+          .map((x) => (typeof x?.symbol === 'string' ? x.symbol : ''))
+          .map((s) => s.trim().toUpperCase())
+          .filter(Boolean)
+          .filter((s) => s.endsWith(`_${quoteAsset}`))
+          .map((s) => s.replace('_', ''));
       }
     } catch (e) {
       fetchError = e instanceof Error ? e.message : String(e);
-    }
-
-    // 2. Fallback to Binance TR API if Vision fails (unlikely on Vercel but good for local)
-    if (symbols.length === 0) {
-      try {
-        const r = await fetch('https://www.binance.tr/open/v1/common/symbols', {
-          headers: {
-            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-          }
-        });
-        if (r.ok) {
-          const body = await r.json();
-          const list = body?.data?.list;
-          if (Array.isArray(list)) {
-            symbols = list
-              .map((x) => (typeof x?.symbol === 'string' ? x.symbol : ''))
-              .map((s) => s.trim().toUpperCase())
-              .filter(Boolean)
-              .filter((s) => s.endsWith(`_${quoteAsset}`))
-              .map((s) => s.replace('_', ''));
-          }
-        }
-      } catch (e) {
-        fetchError = (fetchError ? fetchError + ' | ' : '') + (e instanceof Error ? e.message : String(e));
-      }
     }
 
     if (symbols.length > 0) {
@@ -297,7 +362,11 @@ function createApp() {
       return res.json({ ok: true, quoteAsset, symbols });
     }
 
-    return res.json({ ok: false, quoteAsset, symbols: [], error: fetchError || 'No symbols found' });
+    if (binanceTrSymbolsState.quoteAsset === quoteAsset && Array.isArray(binanceTrSymbolsState.symbols) && binanceTrSymbolsState.symbols.length > 0) {
+      return res.status(200).json({ ok: true, quoteAsset, symbols: binanceTrSymbolsState.symbols, stale: true });
+    }
+
+    return res.status(503).json({ ok: false, quoteAsset, symbols: [], error: fetchError || 'Binance TR symbols alınamadı.' });
   });
 
   const BINANCE_HTTP_BASES = [
@@ -491,12 +560,32 @@ function createApp() {
       return Number.isFinite(n) ? n : d;
     }
 
+    function pct(a, b) {
+      if (!Number.isFinite(a) || !Number.isFinite(b) || b === 0) return 0;
+      return ((a - b) / b) * 100;
+    }
+
     function calcEMA(data, p) {
       if (!Array.isArray(data) || data.length < p) return null;
       const k = 2 / (p + 1);
       let e = data.slice(0, p).reduce((a, b) => a + b, 0) / p;
       for (let i = p; i < data.length; i++) e = data[i] * k + e * (1 - k);
       return +e.toFixed(6);
+    }
+
+    function calcEmaSeries(data, p) {
+      if (!Array.isArray(data) || data.length < p) return null;
+      const k = 2 / (p + 1);
+      const out = new Array(data.length).fill(null);
+      let e = 0;
+      for (let i = 0; i < p; i += 1) e += data[i];
+      e /= p;
+      out[p - 1] = e;
+      for (let i = p; i < data.length; i += 1) {
+        e = data[i] * k + e * (1 - k);
+        out[i] = e;
+      }
+      return out;
     }
 
     function calcRSI(data, p = 14) {
@@ -542,20 +631,82 @@ function createApp() {
       return { macd: +macd.toFixed(6), signal, hist };
     }
 
-    function minInWindow(values, lookback) {
-      const start = Math.max(0, values.length - lookback);
-      if (values.length <= start) return null;
-      let min = Infinity;
-      for (let i = start; i < values.length; i++) min = Math.min(min, values[i]);
-      return Number.isFinite(min) ? min : null;
+    function avg(values) {
+      if (!Array.isArray(values) || values.length === 0) return 0;
+      let sum = 0;
+      for (const v of values) sum += Number(v) || 0;
+      return sum / values.length;
     }
 
     const quoteAsset = String(req.query?.quoteAsset || 'TRY').trim().toUpperCase() || 'TRY';
+    try {
+      assertQuoteAssetTry(quoteAsset);
+    } catch (e) {
+      return errorResponse(res, e?.status || 400, e instanceof Error ? e.message : 'Geçersiz quoteAsset.');
+    }
     const desired = clamp(req.query?.pickTopK ?? req.query?.desired ?? 3, 1, 3);
     const timeoutMs = clamp(req.query?.timeoutMs ?? 4000, 1000, 5000);
     const maxTickers = clamp(req.query?.maxTickers ?? 60, 20, 200);
-    const concurrency = clamp(req.query?.concurrency ?? 3, 1, 5);
+    const concurrency = clamp(req.query?.concurrency ?? 3, 1, 3);
     const excludeBases = new Set(['USDT', 'USDC', 'FDUSD', 'TUSD', 'BUSD', 'DAI', 'USDP', 'PAXG', 'XAUT']);
+
+    let allowedSymbolsSet = null;
+    try {
+      const now = nowMs();
+      if (binanceTrSymbolsState.expiresAtMs > now && binanceTrSymbolsState.quoteAsset === quoteAsset && binanceTrSymbolsState.symbols.length > 0) {
+        allowedSymbolsSet = new Set(binanceTrSymbolsState.symbols);
+      } else {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), timeoutMs);
+        const r = await fetch(`https://www.binance.tr/open/v1/common/symbols`, {
+          signal: controller.signal,
+          headers: {
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          },
+        });
+        clearTimeout(timeout);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const body = await r.json();
+        const list = body?.data?.list;
+        const symbols = Array.isArray(list)
+          ? list
+            .map((x) => (typeof x?.symbol === 'string' ? x.symbol : ''))
+            .map((s) => s.trim().toUpperCase())
+            .filter(Boolean)
+            .filter((s) => s.endsWith(`_${quoteAsset}`))
+            .map((s) => s.replace('_', ''))
+          : [];
+        if (symbols.length === 0) throw new Error('No symbols');
+        binanceTrSymbolsState.expiresAtMs = now + 10 * 60_000;
+        binanceTrSymbolsState.quoteAsset = quoteAsset;
+        binanceTrSymbolsState.symbols = symbols;
+        allowedSymbolsSet = new Set(symbols);
+      }
+    } catch (e) {
+      return res.status(503).json({
+        ok: false,
+        error: 'Binance TR sembol listesi alınamadı.',
+        details: e instanceof Error ? e.message : String(e),
+      });
+    }
+
+    const CONFIG = {
+      crossLookbackBars: 3,
+      maxEntryBarsAfterCross: 3,
+      rejectIfCrossOlderThanBars: 3,
+      maxMoveSinceCrossPct: 7.0,
+      maxMoveAfterCrossToEma21Pct: 8.0,
+      maxMoveAfterCrossToEma5Pct: 4.5,
+      maxPostCrossVolumeMult: 3.2,
+      maxPostCrossCandlePct: 6.0,
+      maxPostCrossRangePct: 9.0,
+      maxCurrentCandleBodyPctForEntry: 5.0,
+      maxCurrentCandleRangePctForEntry: 8.0,
+      minRR: 1.5,
+      minCandidateScore: 55,
+      rrMinClamp: 1.2,
+      rrMaxClamp: 3.2,
+    };
 
     let tickers;
     try {
@@ -566,6 +717,7 @@ function createApp() {
 
     const tryTickers = (Array.isArray(tickers) ? tickers : [])
       .filter((t) => typeof t?.symbol === 'string' && String(t.symbol).toUpperCase().endsWith(quoteAsset))
+      .filter((t) => allowedSymbolsSet.has(String(t.symbol).toUpperCase()))
       .filter((t) => {
         const sym = String(t.symbol).toUpperCase();
         const base = sym.slice(0, Math.max(0, sym.length - quoteAsset.length));
@@ -578,45 +730,18 @@ function createApp() {
 
     const built = [];
 
-    async function buildCandidate(t) {
-      const symbol = String(t.symbol || '').trim().toUpperCase();
-      if (!symbol) return null;
-      let klines;
-      try {
-        klines = await fetchBinanceVisionKlines({ symbol, interval: '1h', limit: 200, timeoutMs });
-      } catch {
-        return null;
-      }
-      if (!Array.isArray(klines) || klines.length < 60) return null;
-
-      const closes = [];
-      const highs = [];
-      const lows = [];
-      const volumes = [];
-      for (const k of klines) {
-        if (!Array.isArray(k) || k.length < 6) continue;
-        const c = toNum(k[4]);
-        const h = toNum(k[2]);
-        const l = toNum(k[3]);
-        const v = toNum(k[5]);
-        if (!Number.isFinite(c) || !Number.isFinite(h) || !Number.isFinite(l) || !Number.isFinite(v)) continue;
-        if (c <= 0 || h <= 0 || l <= 0 || v < 0) continue;
-        closes.push(c);
-        highs.push(h);
-        lows.push(l);
-        volumes.push(v);
-      }
-      if (closes.length < 60) return null;
+    function evaluateSymbol(params) {
+      const symbol = String(params.symbol || '').trim().toUpperCase();
+      const t = params.ticker;
+      const opens = params.opens;
+      const highs = params.highs;
+      const lows = params.lows;
+      const closes = params.closes;
+      const volumes = params.volumes;
 
       const price = closes[closes.length - 1];
-      if (!Number.isFinite(price) || price <= 0) return null;
-
-      const vol20 = volumes.slice(-20);
-      let vol20sum = 0;
-      for (const v of vol20) vol20sum += v;
-      const vol20avg = vol20.length ? vol20sum / vol20.length : 0;
-      const curVol = volumes[volumes.length - 1] ?? 0;
-      const volMult = vol20avg > 0 ? +(curVol / vol20avg).toFixed(2) : 0;
+      const lastPrice = toNum(t?.lastPrice, price);
+      const lastChangePercent = toNum(t?.priceChangePercent, 0);
 
       const e5 = calcEMA(closes, 5);
       const e21 = calcEMA(closes, 21);
@@ -625,53 +750,322 @@ function createApp() {
       const rsi = calcRSI(closes, 14);
       const atr = calcATR(highs, lows, closes, 14);
       const macd = calcMACD(closes);
+      if ([e5, e21, e55, e144, rsi, atr].some((v) => v == null) || !macd) return null;
 
-      if ([e5, e21, e55, rsi, atr].some((v) => v == null) || !macd) return null;
+      const vol20avg = avg(volumes.slice(-20));
+      const volMult = vol20avg > 0 ? +(volumes[volumes.length - 1] / vol20avg).toFixed(2) : 0;
 
-      const trendLong = e5 > e21 && e21 > e55;
-      const macdLong = macd.hist != null && macd.hist > 0;
-      const volLong = volMult >= 1.1;
-      const gates = [trendLong, macdLong, volLong].filter(Boolean).length;
-      let longScore = gates * 20 + (rsi > 50 ? 10 : 0) + (volMult > 1.5 ? 10 : 0);
-      longScore = Math.max(0, Math.min(100, Math.round(longScore)));
+      const e5Series = calcEmaSeries(closes, 5);
+      const e21Series = calcEmaSeries(closes, 21);
+      let crossIndex = null;
+      if (e5Series && e21Series) {
+        for (let i = closes.length - 1; i >= 1 && i >= closes.length - 40; i -= 1) {
+          const p5 = e5Series[i - 1];
+          const p21 = e21Series[i - 1];
+          const c5 = e5Series[i];
+          const c21 = e21Series[i];
+          if (Number.isFinite(p5) && Number.isFinite(p21) && Number.isFinite(c5) && Number.isFinite(c21)) {
+            if (p5 <= p21 && c5 > c21) {
+              crossIndex = i;
+              break;
+            }
+          }
+        }
+      }
 
-      let stop = Math.min(price - atr * 1.6, (minInWindow(lows, 20) ?? price) * 0.99);
-      stop = Math.max(stop, price * 0.92);
-      stop = Math.min(stop, price * 0.98);
-      const longStop = +stop.toFixed(6);
-      const risk = price - longStop;
-      const longTarget = +(price + risk * 2.5).toFixed(6);
-      const longRR = risk > 0 ? +((longTarget - price) / risk).toFixed(2) : 0;
+      const lastIndex = closes.length - 1;
+      const crossBarsAgo = crossIndex == null ? null : lastIndex - crossIndex;
+      const prevE5 = e5Series && lastIndex - 1 >= 0 ? e5Series[lastIndex - 1] : null;
+      const prevE21 = e21Series && lastIndex - 1 >= 0 ? e21Series[lastIndex - 1] : null;
+      const freshCrossNow =
+        crossBarsAgo === 0 &&
+        prevE5 != null &&
+        prevE21 != null &&
+        Number.isFinite(prevE5) &&
+        Number.isFinite(prevE21) &&
+        prevE5 <= prevE21 &&
+        e5 > e21;
 
-      if (!(longScore >= 30) || !(longRR >= 1.5)) return null;
+      const recentCross = crossBarsAgo != null && crossBarsAgo <= CONFIG.maxEntryBarsAfterCross;
+      const validCrossWindow = crossBarsAgo != null && crossBarsAgo >= 0 && crossBarsAgo <= CONFIG.rejectIfCrossOlderThanBars;
+      const crossTooOld = crossBarsAgo == null || crossBarsAgo > CONFIG.rejectIfCrossOlderThanBars;
 
-      const lastPrice = toNum(t.lastPrice, price);
-      const lastChangePercent = toNum(t.priceChangePercent, 0);
+      let postCrossBarsAnalyzed = 0;
+      let moveSinceCrossPct = 0;
+      let maxPostCrossVolMult = 0;
+      let maxPostCrossCandlePct = 0;
+      let maxPostCrossRangePct = 0;
+      let postCrossPumpDetected = false;
+
+      if (crossIndex != null) {
+        const crossClose = closes[crossIndex];
+        moveSinceCrossPct = pct(price, crossClose);
+        for (let i = crossIndex; i <= lastIndex; i += 1) {
+          postCrossBarsAnalyzed += 1;
+          const o = opens[i];
+          const h = highs[i];
+          const l = lows[i];
+          const c = closes[i];
+          const v = volumes[i];
+
+          const bodyPct = o > 0 ? (Math.abs(c - o) / o) * 100 : 0;
+          const rangePct = l > 0 ? ((h - l) / l) * 100 : 0;
+          const volAvg = avg(volumes.slice(Math.max(0, i - 20), i));
+          const candleVolMult = volAvg > 0 ? v / volAvg : 0;
+
+          maxPostCrossVolMult = Math.max(maxPostCrossVolMult, candleVolMult);
+          maxPostCrossCandlePct = Math.max(maxPostCrossCandlePct, bodyPct);
+          maxPostCrossRangePct = Math.max(maxPostCrossRangePct, rangePct);
+
+          if (
+            bodyPct > CONFIG.maxPostCrossCandlePct ||
+            rangePct > CONFIG.maxPostCrossRangePct ||
+            candleVolMult > CONFIG.maxPostCrossVolumeMult
+          ) {
+            postCrossPumpDetected = true;
+          }
+        }
+      }
+
+      moveSinceCrossPct = +moveSinceCrossPct.toFixed(2);
+      maxPostCrossVolMult = +maxPostCrossVolMult.toFixed(2);
+      maxPostCrossCandlePct = +maxPostCrossCandlePct.toFixed(2);
+      maxPostCrossRangePct = +maxPostCrossRangePct.toFixed(2);
+
+      const lastOpen = opens[lastIndex];
+      const lastHigh = highs[lastIndex];
+      const lastLow = lows[lastIndex];
+      const lastClose = closes[lastIndex];
+      const currentBodyPct = lastOpen > 0 ? (Math.abs(lastClose - lastOpen) / lastOpen) * 100 : 0;
+      const currentRangePct = lastLow > 0 ? ((lastHigh - lastLow) / lastLow) * 100 : 0;
+      const currentCandleTooAggressive =
+        currentBodyPct > CONFIG.maxCurrentCandleBodyPctForEntry ||
+        currentRangePct > CONFIG.maxCurrentCandleRangePctForEntry;
+
+      const distPriceEma21Pct = e21 > 0 ? (Math.abs(price - e21) / e21) * 100 : 999;
+      const distPriceEma5Pct = e5 > 0 ? (Math.abs(price - e5) / e5) * 100 : 999;
+      const moveSinceCrossTooHigh = moveSinceCrossPct > CONFIG.maxMoveSinceCrossPct;
+      const priceTooFarAfterCross =
+        distPriceEma21Pct > CONFIG.maxMoveAfterCrossToEma21Pct ||
+        distPriceEma5Pct > CONFIG.maxMoveAfterCrossToEma5Pct;
+
+      const lateEntryTrap =
+        crossTooOld ||
+        !validCrossWindow ||
+        moveSinceCrossTooHigh ||
+        distPriceEma21Pct > CONFIG.maxMoveAfterCrossToEma21Pct ||
+        distPriceEma5Pct > CONFIG.maxMoveAfterCrossToEma5Pct ||
+        postCrossPumpDetected ||
+        currentCandleTooAggressive;
+
+      const ema5Above21 = e5 > e21;
+      const emaRuleStrict =
+        ema5Above21 &&
+        price > e5 &&
+        validCrossWindow &&
+        !lateEntryTrap &&
+        (freshCrossNow || recentCross);
+
+      const cleanMomentum = rsi >= 50 && macd.hist != null && macd.hist > 0 && ema5Above21 && price > e5;
+      const volumeOk = volMult >= 1.1;
+      const isPump =
+        postCrossPumpDetected ||
+        currentCandleTooAggressive ||
+        moveSinceCrossTooHigh ||
+        priceTooFarAfterCross;
+
+      let dynamicRR = 2.25;
+      if (ema5Above21) dynamicRR += 0.1;
+      if (e5 > e55 && e55 > e144) dynamicRR += 0.25;
+      if (price > e5) dynamicRR += 0.1;
+      if (rsi >= 52 && rsi <= 68) dynamicRR += 0.15;
+      if (macd.hist != null && macd.hist > 0) dynamicRR += 0.15;
+      if (volMult >= 1.25) dynamicRR += 0.1;
+
+      if (crossTooOld) dynamicRR -= 0.6;
+      if (lateEntryTrap) dynamicRR -= 0.8;
+      if (postCrossPumpDetected) dynamicRR -= 0.7;
+      if (moveSinceCrossTooHigh) dynamicRR -= 0.5;
+      dynamicRR = clamp(dynamicRR, CONFIG.rrMinClamp, CONFIG.rrMaxClamp);
+
+      const stopLoss = e21 * 0.97;
+      const risk = price - stopLoss;
+      const takeProfit = risk > 0 ? price + risk * dynamicRR : 0;
+      const riskReward = risk > 0 ? dynamicRR : 0;
+
+      let score = 55;
+      const warnings = [];
+      if (freshCrossNow) score += 10;
+      else if (crossBarsAgo === 1) score += 8;
+      else if (crossBarsAgo === 2) score += 5;
+      else if (crossBarsAgo === 3) {
+        score += 2;
+        warnings.push('Cross 3 bar önce: giriş penceresinin son sınırı.');
+      } else {
+        score -= 35;
+        warnings.push('Cross eski veya bulunamadı: giriş reddedildi.');
+      }
+
+      if (crossTooOld) score -= 30;
+      if (lateEntryTrap) score -= 35;
+      if (postCrossPumpDetected) score -= 30;
+      if (moveSinceCrossTooHigh) score -= 18;
+      if (priceTooFarAfterCross) score -= 18;
+      if (currentCandleTooAggressive) score -= 20;
+
+      if (e5 > e21) score += 6;
+      if (e5 > e55) score += 4;
+      if (e55 > e144) score += 4;
+      if (price > e5) score += 4;
+      if (rsi >= 50) score += 4;
+      if (macd.hist != null && macd.hist > 0) score += 4;
+      if (volMult >= 1.1) score += 4;
+
+      score = Math.round(clamp(score, 0, 100));
+      const tier = score >= 85 ? 'A' : score >= 70 ? 'B' : 'C';
+
+      const tradeEligible =
+        emaRuleStrict &&
+        validCrossWindow &&
+        !crossTooOld &&
+        !lateEntryTrap &&
+        cleanMomentum &&
+        volumeOk &&
+        !isPump &&
+        risk > 0 &&
+        riskReward >= CONFIG.minRR &&
+        score >= CONFIG.minCandidateScore;
+
+      const reasons = [];
+      if (!ema5Above21) reasons.push('EMA5 <= EMA21');
+      if (!(price > e5)) reasons.push('Fiyat EMA5 üstünde değil');
+      if (!validCrossWindow) reasons.push('Cross giriş penceresinde değil');
+      if (crossTooOld) reasons.push('Cross çok eski veya yok');
+      if (lateEntryTrap) reasons.push('Geç giriş tuzağı');
+      if (!cleanMomentum) reasons.push('Momentum temiz değil (RSI/MACD)');
+      if (!volumeOk) reasons.push('Hacim yetersiz');
+      if (isPump) reasons.push('Pump riski');
+      if (!(risk > 0)) reasons.push('Risk hesaplanamadı');
+      if (!(riskReward >= CONFIG.minRR)) reasons.push(`RR < ${CONFIG.minRR}`);
+      if (!(score >= CONFIG.minCandidateScore)) reasons.push(`Skor < ${CONFIG.minCandidateScore}`);
+
+      const hitRules = [
+        `ema5Above21=${ema5Above21}`,
+        `price>ema5=${price > e5}`,
+        `freshCrossNow=${freshCrossNow}`,
+        `recentCross=${recentCross}`,
+        `validCrossWindow=${validCrossWindow}`,
+        `crossTooOld=${crossTooOld}`,
+        `lateEntryTrap=${lateEntryTrap}`,
+        `postCrossPumpDetected=${postCrossPumpDetected}`,
+        `currentCandleTooAggressive=${currentCandleTooAggressive}`,
+      ].join(', ');
+
+      const scoreDetail = [
+        `score=${score}`,
+        `tier=${tier}`,
+        `crossBarsAgo=${crossBarsAgo == null ? 'null' : crossBarsAgo}`,
+        `moveSinceCrossPct=${moveSinceCrossPct}`,
+        `distEma21Pct=${distPriceEma21Pct.toFixed(2)}`,
+        `distEma5Pct=${distPriceEma5Pct.toFixed(2)}`,
+        `maxPostCrossVolMult=${maxPostCrossVolMult}`,
+        `maxPostCrossBodyPct=${maxPostCrossCandlePct}`,
+        `maxPostCrossRangePct=${maxPostCrossRangePct}`,
+        `volMult=${volMult.toFixed(2)}`,
+        `rsi=${rsi.toFixed(2)}`,
+        `macdHist=${macd.hist == null ? 'null' : macd.hist.toFixed(6)}`,
+        `dynamicRR=${riskReward.toFixed(2)}`,
+      ].join(' | ');
+
       return {
         symbol,
-        score: longScore,
+        score,
+        tier,
+        action: tradeEligible ? 'BUY' : 'WATCHLIST',
+        tradeEligible,
+        reasons,
+        warnings,
+        hitRules,
+        scoreDetail,
         scoreBreakdown: {
-          freshCross: false,
-          trendOk: trendLong,
+          freshCross: Boolean(freshCrossNow),
+          trendOk: Boolean(ema5Above21),
           priceAboveEma21: e21 > 0 ? price >= e21 : false,
           breakout: false,
-          pullbackReclaim: trendLong,
-          volMultOk: volLong,
+          pullbackReclaim: Boolean(ema5Above21),
+          volMultOk: Boolean(volMult >= 1.1),
           ema21SlopeUp: false,
           flatPenalty: false,
-          pumpPenalty: false,
+          pumpPenalty: Boolean(isPump),
         },
         entry: Number(price.toFixed(6)),
-        target: Number(longTarget.toFixed(6)),
-        stop: Number(longStop.toFixed(6)),
-        riskReward: Number(longRR.toFixed(2)),
+        target: Number(takeProfit.toFixed(6)),
+        stop: Number(stopLoss.toFixed(6)),
+        riskReward: Number(riskReward.toFixed(2)),
         lastPrice: Number(lastPrice.toFixed(6)),
         lastChangePercent: Number(lastChangePercent.toFixed(2)),
         ema5: Number(e5.toFixed(6)),
         ema21: Number(e21.toFixed(6)),
-        ema144: Number((e144 ?? 0).toFixed(6)),
+        ema55: Number(e55.toFixed(6)),
+        ema144: Number(e144.toFixed(6)),
+        e5: Number(e5.toFixed(6)),
+        e21: Number(e21.toFixed(6)),
+        e55: Number(e55.toFixed(6)),
+        e144: Number(e144.toFixed(6)),
+        rsi: Number(rsi.toFixed(2)),
+        macdHist: macd.hist == null ? null : Number(macd.hist.toFixed(6)),
+        atr: Number(atr.toFixed(6)),
         volMult: Number(volMult.toFixed(2)),
+        validCrossWindow,
+        crossTooOld,
+        lateEntryTrap,
+        postCrossPumpDetected,
+        postCrossBarsAnalyzed,
+        moveSinceCrossPct,
+        maxPostCrossVolMult,
+        maxPostCrossCandlePct,
+        maxPostCrossRangePct,
+        currentCandleTooAggressive,
+        moveSinceCrossTooHigh,
+        priceTooFarAfterCross,
       };
+    }
+
+    async function buildCandidate(t) {
+      const symbol = String(t.symbol || '').trim().toUpperCase();
+      if (!symbol) return null;
+      if (!allowedSymbolsSet.has(symbol)) return null;
+      let klines;
+      try {
+        klines = await fetchBinanceVisionKlines({ symbol, interval: '1h', limit: 200, timeoutMs });
+      } catch {
+        return null;
+      }
+      if (!Array.isArray(klines) || klines.length < 60) return null;
+
+      const opens = [];
+      const closes = [];
+      const highs = [];
+      const lows = [];
+      const volumes = [];
+      for (const k of klines) {
+        if (!Array.isArray(k) || k.length < 6) continue;
+        const o = toNum(k[1]);
+        const h = toNum(k[2]);
+        const l = toNum(k[3]);
+        const c = toNum(k[4]);
+        const v = toNum(k[5]);
+        if (!Number.isFinite(o) || !Number.isFinite(c) || !Number.isFinite(h) || !Number.isFinite(l) || !Number.isFinite(v)) continue;
+        if (o <= 0 || c <= 0 || h <= 0 || l <= 0 || v < 0) continue;
+        opens.push(o);
+        closes.push(c);
+        highs.push(h);
+        lows.push(l);
+        volumes.push(v);
+      }
+      if (closes.length < 160) return null;
+
+      return evaluateSymbol({ symbol, ticker: t, opens, highs, lows, closes, volumes });
     }
 
     for (let i = 0; i < tryTickers.length; i += concurrency) {
@@ -686,11 +1080,11 @@ function createApp() {
     return res.json({
       ok: true,
       data: built.slice(0, desired),
-      meta: { quoteAsset, desired, maxTickers, concurrency },
+      meta: { quoteAsset, desired, maxTickers, concurrency, allowedSymbolsCount: allowedSymbolsSet.size },
     });
   });
 
-  app.post('/scan', (req, res) => {
+  app.post('/scan', wrapAsync(async (req, res) => {
     try {
       const requestBody = req.body || {};
 
@@ -749,14 +1143,67 @@ function createApp() {
         return { macd: +macd.toFixed(6), signal, hist };
       }
 
+      const quoteAsset = normalizeQuoteAsset(requestBody.quoteAsset || 'TRY') || 'TRY';
+      assertQuoteAssetTry(quoteAsset);
+
       // 1) SYMBOL ÇÖZÜMLEME
       let symbol = String(requestBody.symbol || '').toUpperCase().trim();
       if (!symbol) symbol = 'NO_SYMBOL';
+      assertSymbolTryPair(symbol);
 
       // 2) KLINES INPUT ÇÖZÜMLEME
       let klines = requestBody.klines || requestBody.data || [];
 
       if (!Array.isArray(klines)) klines = [];
+
+      const klineValidation = validateBinanceKlinesArray(klines);
+      if (!klineValidation.ok) {
+        return res.status(400).json({ symbol, motorOk: false, reason: 'Kline formatı geçersiz', details: klineValidation });
+      }
+
+      const now = nowMs();
+      let allowedSymbols = [];
+      if (binanceTrSymbolsState.expiresAtMs > now && binanceTrSymbolsState.quoteAsset === 'TRY') {
+        allowedSymbols = binanceTrSymbolsState.symbols;
+      }
+      if (allowedSymbols.length === 0) {
+        try {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 5000);
+          const r = await fetch('https://www.binance.tr/open/v1/common/symbols', {
+            signal: controller.signal,
+            headers: {
+              'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            }
+          });
+          clearTimeout(timeout);
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          const body = await r.json();
+          const list = body?.data?.list;
+          if (Array.isArray(list)) {
+            allowedSymbols = list
+              .map((x) => (typeof x?.symbol === 'string' ? x.symbol : ''))
+              .map((s) => s.trim().toUpperCase())
+              .filter(Boolean)
+              .filter((s) => s.endsWith('_TRY'))
+              .map((s) => s.replace('_', ''));
+          }
+          if (allowedSymbols.length > 0) {
+            binanceTrSymbolsState.expiresAtMs = now + 10 * 60_000;
+            binanceTrSymbolsState.quoteAsset = 'TRY';
+            binanceTrSymbolsState.symbols = allowedSymbols;
+          }
+        } catch {
+        }
+      }
+
+      const allowedSet = new Set(allowedSymbols);
+      if (allowedSet.size === 0) {
+        return res.status(503).json({ symbol, motorOk: false, reason: 'Binance TR sembol listesi alınamadı' });
+      }
+      if (!allowedSet.has(symbol)) {
+        return res.status(403).json({ symbol, motorOk: false, reason: 'Symbol allowlist dışı (Binance TR listesinde yok)' });
+      }
 
       if (!symbol || symbol === 'NO_SYMBOL') {
         return res.json({ symbol: 'UNKNOWN', motorOk: false, reason: 'symbol bulunamadı' });
@@ -864,9 +1311,12 @@ function createApp() {
           gradualVolUpSoft: volMult >= 1.05
       });
     } catch (e) {
-      return res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+      const status = e && typeof e === 'object' && Number.isFinite(e.status) ? e.status : 500;
+      const message = e instanceof Error ? e.message : String(e);
+      const details = e && typeof e === 'object' ? e.details : undefined;
+      return res.status(status).json({ error: message, details });
     }
-  });
+  }));
 
   app.post('/auth/register', wrapAsync(async (req, res) => {
     const email = normalizeEmail(req.body?.email);
@@ -1094,6 +1544,55 @@ function createApp() {
     const positions = Array.isArray(req.body?.positions) ? req.body.positions : [];
     const updatedAtMs = nowMs();
 
+    let allowedSymbolsSet = null;
+    try {
+      const now = nowMs();
+      if (binanceTrSymbolsState.expiresAtMs > now && binanceTrSymbolsState.quoteAsset === 'TRY' && binanceTrSymbolsState.symbols.length > 0) {
+        allowedSymbolsSet = new Set(binanceTrSymbolsState.symbols);
+      } else {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5000);
+        const r = await fetch('https://www.binance.tr/open/v1/common/symbols', {
+          signal: controller.signal,
+          headers: {
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          }
+        });
+        clearTimeout(timeout);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const body = await r.json();
+        const list = body?.data?.list;
+        const symbols = Array.isArray(list)
+          ? list
+            .map((x) => (typeof x?.symbol === 'string' ? x.symbol : ''))
+            .map((s) => s.trim().toUpperCase())
+            .filter(Boolean)
+            .filter((s) => s.endsWith('_TRY'))
+            .map((s) => s.replace('_', ''))
+          : [];
+        if (symbols.length === 0) throw new Error('No symbols');
+        binanceTrSymbolsState.expiresAtMs = now + 10 * 60_000;
+        binanceTrSymbolsState.quoteAsset = 'TRY';
+        binanceTrSymbolsState.symbols = symbols;
+        allowedSymbolsSet = new Set(symbols);
+      }
+    } catch (e) {
+      return res.status(503).json({ ok: false, error: 'Binance TR sembol listesi alınamadı.', details: e instanceof Error ? e.message : String(e) });
+    }
+
+    for (const p of positions) {
+      const symbol = normalizeSymbol(p?.payload?.symbol ?? p?.symbol ?? '');
+      if (!symbol) continue;
+      try {
+        assertSymbolTryPair(symbol);
+      } catch (e) {
+        return res.status(e?.status || 400).json({ ok: false, error: e instanceof Error ? e.message : 'Geçersiz symbol.', symbol });
+      }
+      if (!allowedSymbolsSet.has(symbol)) {
+        return res.status(403).json({ ok: false, error: 'Symbol allowlist dışı (Binance TR listesinde yok).', symbol });
+      }
+    }
+
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -1190,12 +1689,56 @@ function createApp() {
     const reports = Array.isArray(req.body?.reports) ? req.body.reports : [];
     if (reports.length === 0) return res.json({ ok: true });
 
+    let allowedSymbolsSet = null;
+    try {
+      const now = nowMs();
+      if (binanceTrSymbolsState.expiresAtMs > now && binanceTrSymbolsState.quoteAsset === 'TRY' && binanceTrSymbolsState.symbols.length > 0) {
+        allowedSymbolsSet = new Set(binanceTrSymbolsState.symbols);
+      } else {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5000);
+        const r = await fetch('https://www.binance.tr/open/v1/common/symbols', {
+          signal: controller.signal,
+          headers: {
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          }
+        });
+        clearTimeout(timeout);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const body = await r.json();
+        const list = body?.data?.list;
+        const symbols = Array.isArray(list)
+          ? list
+            .map((x) => (typeof x?.symbol === 'string' ? x.symbol : ''))
+            .map((s) => s.trim().toUpperCase())
+            .filter(Boolean)
+            .filter((s) => s.endsWith('_TRY'))
+            .map((s) => s.replace('_', ''))
+          : [];
+        if (symbols.length === 0) throw new Error('No symbols');
+        binanceTrSymbolsState.expiresAtMs = now + 10 * 60_000;
+        binanceTrSymbolsState.quoteAsset = 'TRY';
+        binanceTrSymbolsState.symbols = symbols;
+        allowedSymbolsSet = new Set(symbols);
+      }
+    } catch (e) {
+      return res.status(503).json({ ok: false, error: 'Binance TR sembol listesi alınamadı.', details: e instanceof Error ? e.message : String(e) });
+    }
+
     const createdAtMs = nowMs();
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
       for (const r of reports) {
         const symbol = String(r?.symbol || '').trim().toUpperCase();
+        try {
+          assertSymbolTryPair(symbol);
+        } catch (e) {
+          return res.status(e?.status || 400).json({ ok: false, error: e instanceof Error ? e.message : 'Geçersiz symbol.', symbol });
+        }
+        if (!allowedSymbolsSet.has(symbol)) {
+          return res.status(403).json({ ok: false, error: 'Symbol allowlist dışı (Binance TR listesinde yok).', symbol });
+        }
         const openedAtMs = Number(r?.openedAtMs);
         const closedAtMs = Number(r?.closedAtMs);
         const entry = Number(r?.entry);
@@ -1355,4 +1898,13 @@ if (require.main === module) {
   });
 }
 
-module.exports = { createApp };
+module.exports = {
+  createApp,
+  __test: {
+    normalizeQuoteAsset,
+    normalizeSymbol,
+    assertQuoteAssetTry,
+    assertSymbolTryPair,
+    validateBinanceKlinesArray,
+  },
+};

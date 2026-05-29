@@ -50,6 +50,7 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "set EXPO_HOME=%cd%\\.expo-home&& set DOTSLASH_CACHE=%cd%\\.dotslash-cache&& set EXPO_NO_TELEMETRY=1&& expo start --web --port 8082",
+    "test": "node --test server/index.validation.test.js",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
     "db:to-supabase": "node server/migrate-to-supabase.js",

@@ -50,6 +50,7 @@ Traeresourcesappoutvsworkbenchcontribterminalcommonscriptssafe_rm_aliases.ps1*
 .agents/
 .claude/skills/
 skills-lock.json
+.worktree-backup/
 
 # Design exports (stitch)
 stitch_tradefeed_crypto_tracker/
