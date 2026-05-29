@@ -55,6 +55,7 @@ export function DashboardScreen() {
     const next = scanQuery.data?.topCandidates;
     const asOfMs = scanQuery.data?.asOfMs;
     if (!next || !asOfMs) return;
+    if (next.length === 0) return;
     if (lastScanMs === asOfMs) return;
     setWatchlist(next, asOfMs);
   }, [lastScanMs, scanQuery.data?.asOfMs, scanQuery.data?.topCandidates, setWatchlist]);

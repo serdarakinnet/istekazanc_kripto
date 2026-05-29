@@ -403,17 +403,22 @@ export async function fetchTicker24h(
   const timeoutMs = options?.timeoutMs ?? DEFAULTS.timeoutMs;
   let raw: unknown;
   if (Platform.OS === 'web') {
+    const clampedTimeoutMs = Math.min(5000, timeoutMs);
     try {
-      raw = await fetchTicker24hViaWebSocket(timeoutMs);
+      const url = buildUrl(API_BASE_URL, '/market/ticker/24hr', {
+        timeoutMs: String(clampedTimeoutMs),
+      });
+      const body = await fetchJson<{ ok?: unknown; data?: unknown }>(url, undefined, clampedTimeoutMs);
+      if (body?.ok !== true || !Array.isArray(body?.data) || body.data.length === 0) {
+        throw new Error('Empty ticker list');
+      }
+      raw = body.data;
     } catch {
       try {
-        const url = buildUrl(API_BASE_URL, '/market/ticker/24hr', {
-          timeoutMs: String(timeoutMs),
-        });
-        const body = await fetchJson<{ ok?: unknown; data?: unknown }>(url, undefined, timeoutMs);
-        raw = body?.ok === true ? body.data : [];
+        raw = await fetchTicker24hViaWebSocket(clampedTimeoutMs);
       } catch {
-        raw = [];
+        markApiUnhealthy(Date.now());
+        throw new Error('Ticker listesi alınamadı.');
       }
     }
   } else {
