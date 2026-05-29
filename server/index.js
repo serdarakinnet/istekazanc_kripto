@@ -76,6 +76,16 @@ function normalizeSymbol(value) {
   return String(value || '').trim().toUpperCase();
 }
 
+function readAllowedSymbolsTryFromEnv() {
+  const raw = String(process.env.ALLOWED_SYMBOLS_TRY || '').trim();
+  if (!raw) return [];
+  return raw
+    .split(',')
+    .map((s) => normalizeSymbol(s))
+    .filter(Boolean)
+    .filter((s) => s.endsWith('TRY'));
+}
+
 function httpError(status, message, details) {
   const e = new Error(message);
   e.status = status;
@@ -360,6 +370,14 @@ function createApp() {
       binanceTrSymbolsState.quoteAsset = quoteAsset;
       binanceTrSymbolsState.symbols = symbols;
       return res.json({ ok: true, quoteAsset, symbols });
+    }
+
+    const envSymbols = readAllowedSymbolsTryFromEnv();
+    if (envSymbols.length > 0) {
+      binanceTrSymbolsState.expiresAtMs = now + 10 * 60_000;
+      binanceTrSymbolsState.quoteAsset = quoteAsset;
+      binanceTrSymbolsState.symbols = envSymbols;
+      return res.status(200).json({ ok: true, quoteAsset, symbols: envSymbols, source: 'env' });
     }
 
     if (binanceTrSymbolsState.quoteAsset === quoteAsset && Array.isArray(binanceTrSymbolsState.symbols) && binanceTrSymbolsState.symbols.length > 0) {
@@ -683,11 +701,16 @@ function createApp() {
         allowedSymbolsSet = new Set(symbols);
       }
     } catch (e) {
+      const envSymbols = readAllowedSymbolsTryFromEnv();
+      if (envSymbols.length > 0) {
+        allowedSymbolsSet = new Set(envSymbols);
+      } else {
       return res.status(503).json({
         ok: false,
         error: 'Binance TR sembol listesi alınamadı.',
         details: e instanceof Error ? e.message : String(e),
       });
+      }
     }
 
     const CONFIG = {
@@ -1199,7 +1222,11 @@ function createApp() {
 
       const allowedSet = new Set(allowedSymbols);
       if (allowedSet.size === 0) {
-        return res.status(503).json({ symbol, motorOk: false, reason: 'Binance TR sembol listesi alınamadı' });
+        const envSymbols = readAllowedSymbolsTryFromEnv();
+        if (envSymbols.length === 0) {
+          return res.status(503).json({ symbol, motorOk: false, reason: 'Binance TR sembol listesi alınamadı' });
+        }
+        for (const s of envSymbols) allowedSet.add(s);
       }
       if (!allowedSet.has(symbol)) {
         return res.status(403).json({ symbol, motorOk: false, reason: 'Symbol allowlist dışı (Binance TR listesinde yok)' });
@@ -1577,7 +1604,11 @@ function createApp() {
         allowedSymbolsSet = new Set(symbols);
       }
     } catch (e) {
-      return res.status(503).json({ ok: false, error: 'Binance TR sembol listesi alınamadı.', details: e instanceof Error ? e.message : String(e) });
+      const envSymbols = readAllowedSymbolsTryFromEnv();
+      if (envSymbols.length === 0) {
+        return res.status(503).json({ ok: false, error: 'Binance TR sembol listesi alınamadı.', details: e instanceof Error ? e.message : String(e) });
+      }
+      allowedSymbolsSet = new Set(envSymbols);
     }
 
     for (const p of positions) {
@@ -1722,7 +1753,11 @@ function createApp() {
         allowedSymbolsSet = new Set(symbols);
       }
     } catch (e) {
-      return res.status(503).json({ ok: false, error: 'Binance TR sembol listesi alınamadı.', details: e instanceof Error ? e.message : String(e) });
+      const envSymbols = readAllowedSymbolsTryFromEnv();
+      if (envSymbols.length === 0) {
+        return res.status(503).json({ ok: false, error: 'Binance TR sembol listesi alınamadı.', details: e instanceof Error ? e.message : String(e) });
+      }
+      allowedSymbolsSet = new Set(envSymbols);
     }
 
     const createdAtMs = nowMs();
