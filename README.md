@@ -160,3 +160,4 @@ Bu proje [MIT Lisansı](LICENSE) ile lisanslanmıştır.
 <p align="center">
   <b>⭐ Projeyi beğendiyseniz yıldız vermeyi unutmayın!</b>
 </p>
+istekazanc.com
