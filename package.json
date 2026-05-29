@@ -44,7 +44,7 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "set EXPO_HOME=%cd%\\.expo-home&& set DOTSLASH_CACHE=%cd%\\.dotslash-cache&& set EXPO_NO_TELEMETRY=1&& expo start --web --port 8082",
-    "test": "tsx --test src/services/supabaseClient.test.ts",
+    "test": "tsx --test src/services/*.test.ts",
     "build:web": "expo export --platform web --output-dir dist"
   },
   "private": true

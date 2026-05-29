@@ -50,6 +50,29 @@ type VerifyLoginParams = {
   password: string;
 };
 
+function normalizeEmailInput(value: string): string {
+  return String(value || '').trim().toLowerCase();
+}
+
+function mapSupabaseAuthErrorMessage(message: string): string {
+  const msg = String(message || '').trim();
+  if (!msg) return 'Kimlik doğrulama hatası.';
+
+  if (/invalid login credentials/i.test(msg)) {
+    return 'E-mail veya şifre hatalı. Eğer bu hesabı eski sistemde (API üzerinden) oluşturduysan, Supabase Auth’a taşınmadığı için yeniden kayıt olman gerekir.';
+  }
+
+  if (/email not confirmed/i.test(msg)) {
+    return 'E-mail doğrulanmamış. Gelen kutunu kontrol et, doğrulama linkine tıkla ve sonra tekrar giriş yap.';
+  }
+
+  if (/user already registered/i.test(msg) || /already registered/i.test(msg)) {
+    return 'Bu e-mail ile zaten hesap var. Giriş ekranından e-mail ve şifre ile giriş yap.';
+  }
+
+  return msg;
+}
+
 function requireSupabase() {
   if (!hasSupabaseEnv()) {
     throw new Error('Supabase env eksik: EXPO_PUBLIC_SUPABASE_URL ve EXPO_PUBLIC_SUPABASE_ANON_KEY gerekli.');
@@ -104,19 +127,19 @@ export async function initUserDb(): Promise<void> {
 
 export async function createUser(params: CreateUserParams): Promise<UserRecord> {
   const supabase = requireSupabase();
-  const email = params.email.trim();
+  const email = normalizeEmailInput(params.email);
   const password = params.password;
   const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
     email,
     password,
     options: { data: { displayName: params.displayName ?? null } },
   });
-  if (signUpError) throw new Error(signUpError.message);
+  if (signUpError) throw new Error(mapSupabaseAuthErrorMessage(signUpError.message));
 
   let authUser = signUpData.user;
   if (!signUpData.session) {
     const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-    if (signInError) throw new Error(signInError.message);
+    if (signInError) throw new Error(mapSupabaseAuthErrorMessage(signInError.message));
     authUser = signInData.user;
   }
 
@@ -144,10 +167,10 @@ export async function getUserByEmail(emailInput: string): Promise<UserRecord | n
 
 export async function verifyLogin(params: VerifyLoginParams): Promise<UserRecord> {
   const supabase = requireSupabase();
-  const email = params.email.trim();
+  const email = normalizeEmailInput(params.email);
   const password = params.password;
   const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-  if (signInError) throw new Error(signInError.message);
+  if (signInError) throw new Error(mapSupabaseAuthErrorMessage(signInError.message));
   const authUser = signInData.user;
   if (!authUser?.id || !authUser.email) throw new Error('Giriş başarısız.');
 
@@ -329,3 +352,8 @@ export async function appendUserReports(params: {
   const { error } = await supabase.from('trade_reports').upsert(rows, { onConflict: 'id' });
   if (error) throw new Error(error.message);
 }
+
+export const __test = {
+  normalizeEmailInput,
+  mapSupabaseAuthErrorMessage,
+};
