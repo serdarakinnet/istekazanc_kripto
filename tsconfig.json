@@ -5,5 +5,5 @@
     "strict": true
   },
   "include": ["index.ts", "App.tsx", "src/**/*.ts", "src/**/*.tsx", "nativewind-env.d.ts"],
-  "exclude": ["node_modules"]
+  "exclude": ["node_modules", "src/**/*.test.ts", "src/**/*.test.tsx"]
 }

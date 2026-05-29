@@ -1,28 +1,15 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { usePriceHistoryStore } from '../store/priceHistoryStore';
 import { useAppStore } from '../store/useAppStore';
-import { Platform } from 'react-native';
+
+import { getSupabaseClient, hasSupabaseEnv } from './supabaseClient';
 
 type OnPrice = (symbol: string, price: number) => void;
 
-function resolveApiBaseUrl(): string {
-  const env = String(process.env.EXPO_PUBLIC_API_BASE_URL || '').trim();
-  if (env) return env.replace(/\/+$/, '');
-
-  if (Platform.OS === 'web') {
-    const g = globalThis as unknown as { location?: { protocol?: string; hostname?: string } };
-    const protocol = g.location?.protocol || 'http:';
-    const hostname = g.location?.hostname || 'localhost';
-    const host = hostname.toLowerCase();
-    if (host === 'localhost' || host === '127.0.0.1') return `${protocol}//${hostname}:3001`;
-    return `${protocol}//${hostname}/api`;
-  }
-
-  if (Platform.OS === 'android') return 'http://10.0.2.2:3001';
-  return 'http://localhost:3001';
+function getSupabaseOrNull() {
+  if (!hasSupabaseEnv()) return null;
+  return getSupabaseClient();
 }
-
-const API_BASE_URL = resolveApiBaseUrl();
 const PERSIST_THROTTLE_MS = 5000;
 const lastPersistedAtBySymbol: Record<string, number | undefined> = {};
 let apiBackoffUntilMs = 0;
@@ -72,16 +59,24 @@ async function flushPendingTickers(): Promise<void> {
 
   const batch = items.slice(0, 200);
   try {
-    const res = await fetch(`${API_BASE_URL}/binance/ticker/batch`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items: batch }),
-    });
-    if (!res.ok) {
-      apiFailCount = Math.min(8, apiFailCount + 1);
-      apiBackoffUntilMs = now + Math.min(60_000, 1000 * 2 ** (apiFailCount - 1));
+    const supabase = getSupabaseOrNull();
+    if (!supabase) return;
+    const rows = batch
+      .filter((x) => typeof x.userId === 'string' && x.userId.trim().length > 0)
+      .map((x) => ({
+        symbol: x.symbol,
+        price: x.price,
+        event_at_ms: x.atMs,
+        user_id: x.userId,
+        source: x.source,
+      }));
+    if (rows.length === 0) {
+      const remaining = items.slice(batch.length);
+      await savePendingTickers(remaining);
       return;
     }
+    const { error } = await supabase.from('binance_ticker_prices').insert(rows);
+    if (error) throw new Error(error.message);
     apiFailCount = 0;
     apiBackoffUntilMs = 0;
     const remaining = items.slice(batch.length);
@@ -99,6 +94,7 @@ function persistTickerPrice(symbol: string, price: number) {
   lastPersistedAtBySymbol[symbol] = now;
 
   const userId = useAppStore.getState().user?.id ?? null;
+  if (!userId) return;
   if (now < apiBackoffUntilMs) {
     void enqueueTicker({ symbol, price, atMs: now, userId, source: 'ws' });
     if (!flushTimer) {
@@ -110,27 +106,28 @@ function persistTickerPrice(symbol: string, price: number) {
     }
     return;
   }
-  void fetch(`${API_BASE_URL}/binance/ticker`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ symbol, price, atMs: now, userId, source: 'ws' }),
-  })
-    .then((res) => {
-      if (res.ok) {
+  const supabase = getSupabaseOrNull();
+  if (!supabase) return;
+  void (async () => {
+    try {
+      const { error } = await supabase
+        .from('binance_ticker_prices')
+        .insert({ symbol, price, event_at_ms: now, user_id: userId, source: 'ws' });
+      if (!error) {
         apiFailCount = 0;
         apiBackoffUntilMs = 0;
         void flushPendingTickers();
-      } else {
-        apiFailCount = Math.min(8, apiFailCount + 1);
-        apiBackoffUntilMs = now + Math.min(60_000, 1000 * 2 ** (apiFailCount - 1));
-        void enqueueTicker({ symbol, price, atMs: now, userId, source: 'ws' });
+        return;
       }
-    })
-    .catch(() => {
       apiFailCount = Math.min(8, apiFailCount + 1);
       apiBackoffUntilMs = now + Math.min(60_000, 1000 * 2 ** (apiFailCount - 1));
       void enqueueTicker({ symbol, price, atMs: now, userId, source: 'ws' });
-    });
+    } catch {
+      apiFailCount = Math.min(8, apiFailCount + 1);
+      apiBackoffUntilMs = now + Math.min(60_000, 1000 * 2 ** (apiFailCount - 1));
+      void enqueueTicker({ symbol, price, atMs: now, userId, source: 'ws' });
+    }
+  })();
 }
 
 function buildCombinedTickerStreamUrl(symbols: string[]): string | null {

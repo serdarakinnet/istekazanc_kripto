@@ -11,25 +11,6 @@ import { getUserPositions } from './userDb';
 const BOT_TASK_NAME = 'bist-bot-background';
 const RECENT_CLOSE_COOLDOWN_MS = 60 * 60 * 1000;
 
-function resolveApiBaseUrl(): string {
-  const env = String(process.env.EXPO_PUBLIC_API_BASE_URL || '').trim();
-  if (env) return env.replace(/\/+$/, '');
-
-  if (Platform.OS === 'web') {
-    const g = globalThis as unknown as { location?: { protocol?: string; hostname?: string } };
-    const protocol = g.location?.protocol || 'http:';
-    const hostname = g.location?.hostname || 'localhost';
-    const host = hostname.toLowerCase();
-    if (host === 'localhost' || host === '127.0.0.1') return `${protocol}//${hostname}:3001`;
-    return `${protocol}//${hostname}/api`;
-  }
-
-  if (Platform.OS === 'android') return 'http://10.0.2.2:3001';
-  return 'http://localhost:3001';
-}
-
-const API_BASE_URL = resolveApiBaseUrl();
-
 let poolRefreshPromise: Promise<void> | null = null;
 let lastPoolRefreshAttemptMs = 0;
 
@@ -153,40 +134,7 @@ async function fetchLastPrice(symbol: string, baseUrl: string, timeoutMs: number
   }
 }
 
-async function fetchLastPricesViaApi(symbols: string[], timeoutMs: number): Promise<Record<string, number>> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(`${API_BASE_URL}/market/last-prices`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ symbols, timeoutMs }),
-      signal: controller.signal,
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const body = (await res.json()) as { prices?: unknown };
-    const prices = body?.prices;
-    if (!prices || typeof prices !== 'object') return {};
-
-    const out: Record<string, number> = {};
-    for (const [k, v] of Object.entries(prices as Record<string, unknown>)) {
-      const n = typeof v === 'number' ? v : Number(v);
-      if (Number.isFinite(n)) out[String(k).toUpperCase()] = n;
-    }
-    return out;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 async function fetchLastPrices(symbols: string[], baseUrl: string, timeoutMs: number): Promise<Record<string, number>> {
-  if (Platform.OS === 'web' && API_BASE_URL) {
-    try {
-      return await fetchLastPricesViaApi(symbols, timeoutMs);
-    } catch {
-      return {};
-    }
-  }
   const results: Record<string, number> = {};
   await Promise.all(
     symbols.map(async (symbol) => {

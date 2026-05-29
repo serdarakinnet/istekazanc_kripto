@@ -9,7 +9,6 @@
     "@react-navigation/native-stack": "^7.15.1",
     "@supabase/supabase-js": "^2.106.2",
     "@tanstack/react-query": "^5.100.11",
-    "cors": "^2.8.5",
     "expo": "~56.0.5",
     "expo-background-fetch": "~56.0.15",
     "expo-crypto": "~56.0.4",
@@ -17,10 +16,8 @@
     "expo-sqlite": "~56.0.4",
     "expo-status-bar": "~56.0.4",
     "expo-task-manager": "~56.0.15",
-    "express": "^4.21.2",
     "lucide-react-native": "^1.16.0",
     "nativewind": "^4.2.4",
-    "pg": "^8.16.0",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-native": "0.85.3",
@@ -35,27 +32,20 @@
   },
   "devDependencies": {
     "@anthropic-ai/claude-code": "^2.1.152",
-    "@types/cors": "^2.8.19",
-    "@types/express": "^5.0.6",
-    "@types/pg": "^8.20.0",
     "@types/react": "~19.2.2",
     "babel-preset-expo": "^56.0.11",
     "tailwindcss": "^3.4.17",
+    "tsx": "^4.20.3",
     "typescript": "~6.0.3"
   },
   "scripts": {
-    "api": "node server/index.js",
     "build": "expo export --platform web --output-dir dist",
     "start": "set EXPO_HOME=%cd%\\.expo-home&& set DOTSLASH_CACHE=%cd%\\.dotslash-cache&& set EXPO_NO_TELEMETRY=1&& expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "set EXPO_HOME=%cd%\\.expo-home&& set DOTSLASH_CACHE=%cd%\\.dotslash-cache&& set EXPO_NO_TELEMETRY=1&& expo start --web --port 8082",
-    "test": "node --test server/index.validation.test.js",
-    "db:up": "docker compose up -d",
-    "db:down": "docker compose down",
-    "db:to-supabase": "node server/migrate-to-supabase.js",
-    "build:web": "expo export --platform web --output-dir dist",
-    "vercel-build": "expo export --platform web --output-dir dist"
+    "test": "tsx --test src/services/supabaseClient.test.ts",
+    "build:web": "expo export --platform web --output-dir dist"
   },
   "private": true
 }

@@ -14,12 +14,12 @@ import {
   appendUserReports,
   createUser,
   deleteUserReports,
-  getUserApiCredentials,
+  getCurrentUser,
   getUserPositions,
   getUserReports,
   getUserSettings,
   replaceUserPositions,
-  upsertUserApiCredentials,
+  signOutUser,
   upsertUserSettings,
   verifyLogin,
 } from '../services/userDb';
@@ -66,6 +66,7 @@ type AppState = {
   settings: AppSettings;
   setLocalHydrated: (hydrated: boolean) => void;
   hydrateSecure: () => Promise<void>;
+  hydrateAuthFromSupabase: () => Promise<void>;
   resetReportsDatasetIfNeeded: () => Promise<void>;
   signInWithEmail: (params: { email: string; password: string }) => Promise<void>;
   signUpWithEmail: (params: { email: string; password: string; displayName?: string }) => Promise<void>;
@@ -317,23 +318,104 @@ export const useAppStore = create<AppState>()(
             return;
           }
 
-          const snapshot = get();
-          const userId = snapshot.user?.id;
-          if (snapshot.isSignedIn && userId) {
-            try {
-              const remote = await getUserApiCredentials(userId);
-              if (remote?.apiKey && remote.apiSecret) {
-                await setApiCredentials({ apiKey: remote.apiKey, apiSecret: remote.apiSecret });
-                set({ apiCredentials: { apiKey: remote.apiKey, apiSecret: remote.apiSecret }, hasSecureHydrated: true });
-                return;
-              }
-            } catch {
-            }
-          }
-
           set({ apiCredentials: null, hasSecureHydrated: true });
         } catch {
           set({ apiCredentials: null, hasSecureHydrated: true });
+        }
+      },
+
+      hydrateAuthFromSupabase: async () => {
+        const current = await getCurrentUser().catch(() => null);
+        if (!current) {
+          set({ isSignedIn: false, user: null });
+          return;
+        }
+
+        const resetAtMs = get().reportsResetAtMs;
+        const needsRemoteReset = get().reportsNeedsRemoteReset;
+        const now = Date.now();
+
+        const [settingsRow, positionsRows] = await Promise.all([
+          getUserSettings(current.id),
+          getUserPositions(current.id),
+        ]);
+
+        if (needsRemoteReset) {
+          try {
+            await deleteUserReports(current.id);
+          } catch {
+          }
+          set({ reportsNeedsRemoteReset: false, reportsResetAtMs: now });
+        }
+
+        const effectiveResetAtMs = needsRemoteReset ? now : resetAtMs;
+        const reportsRows = await getUserReports(current.id, {
+          sinceMs: effectiveResetAtMs > 0 ? effectiveResetAtMs : undefined,
+        });
+
+        const settings: AppSettings = settingsRow
+          ? {
+              autoTradeEnabled: Boolean(settingsRow.autoTradeEnabled),
+              minRiskReward:
+                Number.isFinite(Number(settingsRow.minRiskReward)) && Number(settingsRow.minRiskReward) > 0
+                  ? Number(settingsRow.minRiskReward)
+                  : DEFAULT_SETTINGS.minRiskReward,
+              customStrategyCode: typeof settingsRow.customStrategyCode === 'string' ? settingsRow.customStrategyCode : undefined,
+            }
+          : DEFAULT_SETTINGS;
+
+        const positions: ActivePosition[] = positionsRows
+          .map((row) => {
+            try {
+              const parsed = JSON.parse(row.payloadJson) as unknown;
+              if (!parsed || typeof parsed !== 'object') return null;
+              const obj = parsed as Record<string, unknown>;
+              const symbol = obj['symbol'];
+              if (typeof symbol !== 'string' || symbol.length === 0) return null;
+              return { ...(obj as unknown as ActivePosition), openedAtMs: row.openedAtMs };
+            } catch {
+              return null;
+            }
+          })
+          .filter((p): p is ActivePosition => Boolean(p));
+
+        const mergedReports = normalizeAndDedupeReports(
+          reportsRows.map((r) => ({
+            id: r.id,
+            symbol: r.symbol,
+            openedAtMs: r.openedAtMs,
+            closedAtMs: r.closedAtMs,
+            entry: r.entry,
+            exit: r.exit,
+            outcome: r.outcome,
+            pnlPct: r.pnlPct,
+            riskRewardAtEntry: r.riskRewardAtEntry,
+          })),
+        );
+
+        const pending = await readPendingForUser(current.id);
+        const effectiveSettings = pending?.settings ? pending.settings : settings;
+        const effectivePositions = pending?.positions ? pending.positions : positions;
+        const effectiveReports =
+          pending?.reports && pending.reports.length > 0
+            ? mergeReportsById(mergedReports, pending.reports)
+            : mergedReports;
+
+        set({
+          isSignedIn: true,
+          user: { id: current.id, email: current.email, displayName: current.displayName },
+          settings: effectiveSettings,
+          positions: effectivePositions,
+          watchlist: effectivePositions.length > 0 ? effectivePositions : get().watchlist,
+          reports: effectiveReports,
+        });
+
+        if (pending) {
+          void flushPendingToDb({
+            userId: current.id,
+            pending,
+            makePositionId: (symbol) => makeLocalId(`pos_${symbol}`),
+          });
         }
       },
 
@@ -343,10 +425,9 @@ export const useAppStore = create<AppState>()(
         const needsRemoteReset = get().reportsNeedsRemoteReset;
         const now = Date.now();
 
-        const [settingsRow, positionsRows, apiCredsRow] = await Promise.all([
+        const [settingsRow, positionsRows] = await Promise.all([
           getUserSettings(user.id),
           getUserPositions(user.id),
-          getUserApiCredentials(user.id),
         ]);
 
         if (needsRemoteReset) {
@@ -449,14 +530,6 @@ export const useAppStore = create<AppState>()(
           reports: effectiveReports,
         });
 
-        if (apiCredsRow?.apiKey && apiCredsRow.apiSecret) {
-          try {
-            await setApiCredentials({ apiKey: apiCredsRow.apiKey, apiSecret: apiCredsRow.apiSecret });
-          } catch {
-          }
-          set({ apiCredentials: { apiKey: apiCredsRow.apiKey, apiSecret: apiCredsRow.apiSecret } });
-        }
-
         if (pending) {
           void flushPendingToDb({
             userId: user.id,
@@ -487,6 +560,7 @@ export const useAppStore = create<AppState>()(
       signOut: () => {
         const snapshot = get();
         const userId = snapshot.user?.id;
+        void signOutUser().catch(() => {});
         if (userId) {
           void queuePendingSync(userId, {
             settings: snapshot.settings,
@@ -527,14 +601,6 @@ export const useAppStore = create<AppState>()(
 
         await setApiCredentials({ apiKey, apiSecret });
         set({ apiCredentials: { apiKey, apiSecret } });
-
-        const userId = get().user?.id;
-        if (get().isSignedIn && userId) {
-          try {
-            await upsertUserApiCredentials({ userId, apiKey, apiSecret });
-          } catch {
-          }
-        }
       },
 
       forgetApiCredentials: async () => {
@@ -543,6 +609,7 @@ export const useAppStore = create<AppState>()(
 
         const signedIn = get().isSignedIn;
         if (signedIn) {
+          void signOutUser().catch(() => {});
           set({ isSignedIn: false, user: null });
         }
       },

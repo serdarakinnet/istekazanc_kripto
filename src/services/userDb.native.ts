@@ -1,4 +1,4 @@
-import { Platform } from 'react-native';
+import { getSupabaseClient, hasSupabaseEnv } from './supabaseClient';
 
 export type UserRecord = {
   id: string;
@@ -13,6 +13,7 @@ export type UserSettingsRecord = {
   userId: string;
   autoTradeEnabled: boolean;
   minRiskReward: number;
+  customStrategyCode?: string;
   updatedAtMs: number;
 };
 
@@ -38,13 +39,6 @@ export type TradeReportRecord = {
   createdAtMs: number;
 };
 
-export type UserApiCredentialsRecord = {
-  userId: string;
-  apiKey: string;
-  apiSecret: string;
-  updatedAtMs: number;
-};
-
 type CreateUserParams = {
   email: string;
   password: string;
@@ -55,90 +49,53 @@ type VerifyLoginParams = {
   email: string;
   password: string;
 };
-function resolveApiBaseUrl(): string {
-  const env = String(process.env.EXPO_PUBLIC_API_BASE_URL || '').trim();
-  if (env) return env.replace(/\/+$/, '');
 
-  if (Platform.OS === 'web') {
-    const g = globalThis as unknown as { location?: { protocol?: string; hostname?: string } };
-    const protocol = g.location?.protocol || 'http:';
-    const hostname = g.location?.hostname || 'localhost';
-    const host = hostname.toLowerCase();
-    if (host === 'localhost' || host === '127.0.0.1') return `${protocol}//${hostname}:3001`;
-    return `${protocol}//${hostname}/api`;
+function requireSupabase() {
+  if (!hasSupabaseEnv()) {
+    throw new Error('Supabase env eksik: EXPO_PUBLIC_SUPABASE_URL ve EXPO_PUBLIC_SUPABASE_ANON_KEY gerekli.');
   }
-
-  if (Platform.OS === 'android') return 'http://10.0.2.2:3001';
-  return 'http://localhost:3001';
+  return getSupabaseClient();
 }
 
-const API_BASE_URL = resolveApiBaseUrl();
-let apiUnavailableUntilMs = 0;
-let apiFailureCount = 0;
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function readErrorMessage(res: Response): Promise<string> {
-  try {
-    const data = (await res.json()) as { error?: unknown };
-    const msg = typeof data?.error === 'string' ? data.error : null;
-    if (msg) return msg;
-  } catch {
-  }
-
-  try {
-    const text = await res.text();
-    if (text) return text;
-  } catch {
-  }
-
-  return `HTTP ${res.status}`;
-}
-
-async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
-  const url = `${API_BASE_URL}${path}`;
-  const maxAttempts = 3;
+async function ensureAppUserRow(params: { id: string; email: string; displayName?: string | null }): Promise<void> {
+  const supabase = requireSupabase();
   const now = Date.now();
-  if (now < apiUnavailableUntilMs) {
-    throw new Error('Sunucuya bağlanılamadı.');
-  }
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    let res: Response;
-    try {
-      res = await fetch(url, {
-        ...init,
-        headers: {
-          'Content-Type': 'application/json',
-          ...(init?.headers ?? {}),
-        },
-      });
-    } catch {
-      if (attempt < maxAttempts) {
-        await sleep(400 * 2 ** (attempt - 1));
-        continue;
-      }
-      apiFailureCount = Math.min(8, apiFailureCount + 1);
-      apiUnavailableUntilMs =
-        Date.now() + Math.min(60_000, 1000 * 2 ** (apiFailureCount - 1));
-      throw new Error('Sunucuya bağlanılamadı.');
-    }
+  const { error } = await supabase.from('users').upsert(
+    {
+      id: params.id,
+      email: params.email,
+      display_name: params.displayName ?? null,
+      password_hash: 'supabase',
+      password_salt: 'supabase',
+      created_at_ms: now,
+    },
+    { onConflict: 'id' },
+  );
+  if (error) throw new Error(error.message);
+}
 
-    if (res.ok) {
-      apiFailureCount = 0;
-      apiUnavailableUntilMs = 0;
-      return (await res.json()) as T;
-    }
-    const msg = await readErrorMessage(res);
-    if (attempt < maxAttempts && res.status >= 500) {
-      await sleep(400 * 2 ** (attempt - 1));
-      continue;
-    }
-    throw new Error(msg);
-  }
+async function getDisplayNameFromUsersTable(userId: string): Promise<string | null> {
+  const supabase = requireSupabase();
+  const { data, error } = await supabase.from('users').select('display_name').eq('id', userId).maybeSingle();
+  if (error) throw new Error(error.message);
+  const v = (data as { display_name?: unknown } | null)?.display_name;
+  return typeof v === 'string' && v.trim().length > 0 ? v : null;
+}
 
-  throw new Error('Sunucuya bağlanılamadı.');
+export async function getCurrentUser(): Promise<Pick<UserRecord, 'id' | 'email' | 'displayName'> | null> {
+  const supabase = requireSupabase();
+  const { data, error } = await supabase.auth.getUser();
+  if (error) return null;
+  const user = data.user;
+  if (!user?.id || !user.email) return null;
+  const displayName = await getDisplayNameFromUsersTable(user.id).catch(() => null);
+  return { id: user.id, email: user.email, displayName };
+}
+
+export async function signOutUser(): Promise<void> {
+  const supabase = requireSupabase();
+  const { error } = await supabase.auth.signOut();
+  if (error) throw new Error(error.message);
 }
 
 export async function initUserDb(): Promise<void> {
@@ -146,25 +103,37 @@ export async function initUserDb(): Promise<void> {
 }
 
 export async function createUser(params: CreateUserParams): Promise<UserRecord> {
-  const data = await apiRequest<{ id: string; email: string; displayName: string | null; createdAtMs?: number }>(
-    '/auth/register',
-    {
-      method: 'POST',
-      body: JSON.stringify({
-        email: params.email,
-        password: params.password,
-        displayName: params.displayName,
-      }),
-    },
-  );
+  const supabase = requireSupabase();
+  const email = params.email.trim();
+  const password = params.password;
+  const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+    email,
+    password,
+    options: { data: { displayName: params.displayName ?? null } },
+  });
+  if (signUpError) throw new Error(signUpError.message);
+
+  let authUser = signUpData.user;
+  if (!signUpData.session) {
+    const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+    if (signInError) throw new Error(signInError.message);
+    authUser = signInData.user;
+  }
+
+  if (!authUser?.id || !authUser.email) {
+    throw new Error('Kullanıcı oluşturulamadı.');
+  }
+
+  await ensureAppUserRow({ id: authUser.id, email: authUser.email, displayName: params.displayName ?? null });
+  const displayName = await getDisplayNameFromUsersTable(authUser.id).catch(() => params.displayName ?? null);
 
   return {
-    id: data.id,
-    email: data.email,
-    displayName: data.displayName ?? null,
+    id: authUser.id,
+    email: authUser.email,
+    displayName,
     passwordHash: '',
     passwordSalt: '',
-    createdAtMs: Number.isFinite(Number(data.createdAtMs)) ? Number(data.createdAtMs) : Date.now(),
+    createdAtMs: Date.now(),
   };
 }
 
@@ -174,54 +143,105 @@ export async function getUserByEmail(emailInput: string): Promise<UserRecord | n
 }
 
 export async function verifyLogin(params: VerifyLoginParams): Promise<UserRecord> {
-  const data = await apiRequest<{ id: string; email: string; displayName: string | null; createdAtMs?: number }>(
-    '/auth/login',
-    {
-      method: 'POST',
-      body: JSON.stringify({ email: params.email, password: params.password }),
-    },
-  );
+  const supabase = requireSupabase();
+  const email = params.email.trim();
+  const password = params.password;
+  const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+  if (signInError) throw new Error(signInError.message);
+  const authUser = signInData.user;
+  if (!authUser?.id || !authUser.email) throw new Error('Giriş başarısız.');
+
+  await ensureAppUserRow({ id: authUser.id, email: authUser.email, displayName: null });
+  const displayName = await getDisplayNameFromUsersTable(authUser.id).catch(() => null);
 
   return {
-    id: data.id,
-    email: data.email,
-    displayName: data.displayName ?? null,
+    id: authUser.id,
+    email: authUser.email,
+    displayName,
     passwordHash: '',
     passwordSalt: '',
-    createdAtMs: Number.isFinite(Number(data.createdAtMs)) ? Number(data.createdAtMs) : Date.now(),
+    createdAtMs: Date.now(),
   };
 }
 
 export async function getUserSettings(userId: string): Promise<UserSettingsRecord | null> {
   const trimmedUserId = userId.trim();
   if (!trimmedUserId) return null;
-  return await apiRequest<UserSettingsRecord | null>(`/users/${encodeURIComponent(trimmedUserId)}/settings`, {
-    method: 'GET',
-  });
+  const supabase = requireSupabase();
+  const { data, error } = await supabase
+    .from('user_settings')
+    .select('user_id, auto_trade_enabled, min_risk_reward, custom_strategy_code, updated_at_ms')
+    .eq('user_id', trimmedUserId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) return null;
+  return {
+    userId: String((data as { user_id: unknown }).user_id),
+    autoTradeEnabled: Boolean((data as { auto_trade_enabled: unknown }).auto_trade_enabled),
+    minRiskReward: Number((data as { min_risk_reward: unknown }).min_risk_reward),
+    customStrategyCode:
+      typeof (data as { custom_strategy_code?: unknown }).custom_strategy_code === 'string'
+        ? String((data as { custom_strategy_code: unknown }).custom_strategy_code)
+        : undefined,
+    updatedAtMs: Number((data as { updated_at_ms: unknown }).updated_at_ms),
+  };
 }
 
 export async function upsertUserSettings(params: {
   userId: string;
   autoTradeEnabled: boolean;
   minRiskReward: number;
+  customStrategyCode?: string;
 }): Promise<UserSettingsRecord> {
   const trimmedUserId = params.userId.trim();
   if (!trimmedUserId) throw new Error('Kullanıcı bulunamadı.');
-  return await apiRequest<UserSettingsRecord>(`/users/${encodeURIComponent(trimmedUserId)}/settings`, {
-    method: 'PUT',
-    body: JSON.stringify({
-      autoTradeEnabled: params.autoTradeEnabled,
-      minRiskReward: params.minRiskReward,
-    }),
-  });
+  const supabase = requireSupabase();
+  const updatedAtMs = Date.now();
+  const { data, error } = await supabase
+    .from('user_settings')
+    .upsert(
+      {
+        user_id: trimmedUserId,
+        auto_trade_enabled: params.autoTradeEnabled,
+        min_risk_reward: params.minRiskReward,
+        custom_strategy_code: params.customStrategyCode ?? null,
+        updated_at_ms: updatedAtMs,
+      },
+      { onConflict: 'user_id' },
+    )
+    .select('user_id, auto_trade_enabled, min_risk_reward, custom_strategy_code, updated_at_ms')
+    .single();
+  if (error) throw new Error(error.message);
+  return {
+    userId: String((data as { user_id: unknown }).user_id),
+    autoTradeEnabled: Boolean((data as { auto_trade_enabled: unknown }).auto_trade_enabled),
+    minRiskReward: Number((data as { min_risk_reward: unknown }).min_risk_reward),
+    customStrategyCode:
+      typeof (data as { custom_strategy_code?: unknown }).custom_strategy_code === 'string'
+        ? String((data as { custom_strategy_code: unknown }).custom_strategy_code)
+        : undefined,
+    updatedAtMs: Number((data as { updated_at_ms: unknown }).updated_at_ms),
+  };
 }
 
 export async function getUserPositions(userId: string): Promise<StoredPositionRecord[]> {
   const trimmedUserId = userId.trim();
   if (!trimmedUserId) return [];
-  return await apiRequest<StoredPositionRecord[]>(`/users/${encodeURIComponent(trimmedUserId)}/positions`, {
-    method: 'GET',
-  });
+  const supabase = requireSupabase();
+  const { data, error } = await supabase
+    .from('positions')
+    .select('id, user_id, opened_at_ms, payload_json, updated_at_ms')
+    .eq('user_id', trimmedUserId)
+    .order('opened_at_ms', { ascending: false });
+  if (error) throw new Error(error.message);
+  const rows = Array.isArray(data) ? data : [];
+  return rows.map((r) => ({
+    id: String((r as { id: unknown }).id),
+    userId: String((r as { user_id: unknown }).user_id),
+    openedAtMs: Number((r as { opened_at_ms: unknown }).opened_at_ms),
+    payloadJson: JSON.stringify((r as { payload_json: unknown }).payload_json ?? {}),
+    updatedAtMs: Number((r as { updated_at_ms: unknown }).updated_at_ms),
+  }));
 }
 
 export async function replaceUserPositions(params: {
@@ -230,27 +250,58 @@ export async function replaceUserPositions(params: {
 }): Promise<void> {
   const trimmedUserId = params.userId.trim();
   if (!trimmedUserId) throw new Error('Kullanıcı bulunamadı.');
-  await apiRequest<{ ok: true }>(`/users/${encodeURIComponent(trimmedUserId)}/positions`, {
-    method: 'PUT',
-    body: JSON.stringify({ positions: params.positions }),
-  });
+  const supabase = requireSupabase();
+  const updatedAtMs = Date.now();
+  const { error: delError } = await supabase.from('positions').delete().eq('user_id', trimmedUserId);
+  if (delError) throw new Error(delError.message);
+  if (params.positions.length === 0) return;
+  const rows = params.positions.map((p) => ({
+    id: p.id,
+    user_id: trimmedUserId,
+    opened_at_ms: p.openedAtMs,
+    payload_json: p.payload,
+    updated_at_ms: updatedAtMs,
+  }));
+  const { error: insError } = await supabase.from('positions').insert(rows);
+  if (insError) throw new Error(insError.message);
 }
 
 export async function getUserReports(userId: string, params?: { sinceMs?: number }): Promise<TradeReportRecord[]> {
   const trimmedUserId = userId.trim();
   if (!trimmedUserId) return [];
+  const supabase = requireSupabase();
   const sinceMsRaw = params?.sinceMs;
   const sinceMs = Number.isFinite(Number(sinceMsRaw)) ? Math.max(0, Math.trunc(Number(sinceMsRaw))) : null;
-  const qs = sinceMs === null ? '' : `?sinceMs=${encodeURIComponent(String(sinceMs))}`;
-  return await apiRequest<TradeReportRecord[]>(`/users/${encodeURIComponent(trimmedUserId)}/reports${qs}`, {
-    method: 'GET',
-  });
+  let q = supabase
+    .from('trade_reports')
+    .select('id, user_id, symbol, opened_at_ms, closed_at_ms, entry, exit, outcome, pnl_pct, risk_reward_at_entry, created_at_ms')
+    .eq('user_id', trimmedUserId)
+    .order('closed_at_ms', { ascending: false });
+  if (sinceMs !== null) q = q.gte('closed_at_ms', sinceMs);
+  const { data, error } = await q;
+  if (error) throw new Error(error.message);
+  const rows = Array.isArray(data) ? data : [];
+  return rows.map((r) => ({
+    id: String((r as { id: unknown }).id),
+    userId: String((r as { user_id: unknown }).user_id),
+    symbol: String((r as { symbol: unknown }).symbol),
+    openedAtMs: Number((r as { opened_at_ms: unknown }).opened_at_ms),
+    closedAtMs: Number((r as { closed_at_ms: unknown }).closed_at_ms),
+    entry: Number((r as { entry: unknown }).entry),
+    exit: Number((r as { exit: unknown }).exit),
+    outcome: (r as { outcome: unknown }).outcome === 'TP' ? 'TP' : 'SL',
+    pnlPct: Number((r as { pnl_pct: unknown }).pnl_pct),
+    riskRewardAtEntry: Number((r as { risk_reward_at_entry: unknown }).risk_reward_at_entry),
+    createdAtMs: Number((r as { created_at_ms: unknown }).created_at_ms),
+  }));
 }
 
 export async function deleteUserReports(userId: string): Promise<void> {
   const trimmedUserId = userId.trim();
   if (!trimmedUserId) throw new Error('Kullanıcı bulunamadı.');
-  await apiRequest<{ ok: true }>(`/users/${encodeURIComponent(trimmedUserId)}/reports`, { method: 'DELETE' });
+  const supabase = requireSupabase();
+  const { error } = await supabase.from('trade_reports').delete().eq('user_id', trimmedUserId);
+  if (error) throw new Error(error.message);
 }
 
 export async function appendUserReports(params: {
@@ -260,30 +311,21 @@ export async function appendUserReports(params: {
   const trimmedUserId = params.userId.trim();
   if (!trimmedUserId) throw new Error('Kullanıcı bulunamadı.');
   if (params.reports.length === 0) return;
-  await apiRequest<{ ok: true }>(`/users/${encodeURIComponent(trimmedUserId)}/reports`, {
-    method: 'POST',
-    body: JSON.stringify({ reports: params.reports }),
-  });
-}
-
-export async function getUserApiCredentials(userId: string): Promise<UserApiCredentialsRecord | null> {
-  const trimmedUserId = userId.trim();
-  if (!trimmedUserId) return null;
-  return await apiRequest<UserApiCredentialsRecord | null>(
-    `/users/${encodeURIComponent(trimmedUserId)}/api-credentials`,
-    { method: 'GET' },
-  );
-}
-
-export async function upsertUserApiCredentials(params: {
-  userId: string;
-  apiKey: string;
-  apiSecret: string;
-}): Promise<void> {
-  const trimmedUserId = params.userId.trim();
-  if (!trimmedUserId) throw new Error('Kullanıcı bulunamadı.');
-  await apiRequest<{ ok: true }>(`/users/${encodeURIComponent(trimmedUserId)}/api-credentials`, {
-    method: 'PUT',
-    body: JSON.stringify({ apiKey: params.apiKey, apiSecret: params.apiSecret }),
-  });
+  const supabase = requireSupabase();
+  const createdAtMs = Date.now();
+  const rows = params.reports.map((r) => ({
+    id: r.id,
+    user_id: trimmedUserId,
+    symbol: r.symbol,
+    opened_at_ms: r.openedAtMs,
+    closed_at_ms: r.closedAtMs,
+    entry: r.entry,
+    exit: r.exit,
+    outcome: r.outcome,
+    pnl_pct: r.pnlPct,
+    risk_reward_at_entry: r.riskRewardAtEntry,
+    created_at_ms: createdAtMs,
+  }));
+  const { error } = await supabase.from('trade_reports').upsert(rows, { onConflict: 'id' });
+  if (error) throw new Error(error.message);
 }

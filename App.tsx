@@ -143,6 +143,7 @@ function BotSupervisor() {
 
 export default function App() {
   const hydrateSecure = useAppStore((s) => s.hydrateSecure);
+  const hydrateAuthFromSupabase = useAppStore((s) => s.hydrateAuthFromSupabase);
   const resetReportsDatasetIfNeeded = useAppStore((s) => s.resetReportsDatasetIfNeeded);
   const [globalError, setGlobalError] = React.useState<{ message: string; stack?: string } | null>(
     null,
@@ -151,7 +152,8 @@ export default function App() {
   useEffect(() => {
     initUserDb();
     hydrateSecure();
-  }, [hydrateSecure]);
+    void hydrateAuthFromSupabase();
+  }, [hydrateAuthFromSupabase, hydrateSecure]);
 
   useEffect(() => {
     void resetReportsDatasetIfNeeded();

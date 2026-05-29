@@ -109,106 +109,6 @@ export type ScanResult = {
   }>;
 };
 
-function resolveApiBaseUrl(): string {
-  const env = String(process.env.EXPO_PUBLIC_API_BASE_URL || '').trim();
-  if (env) return env.replace(/\/+$/, '');
-
-  if (Platform.OS === 'web') {
-    const g = globalThis as unknown as { location?: { protocol?: string; hostname?: string } };
-    const protocol = g.location?.protocol || 'http:';
-    const hostname = g.location?.hostname || 'localhost';
-    const host = hostname.toLowerCase();
-    if (host === 'localhost' || host === '127.0.0.1') return `${protocol}//${hostname}:3001`;
-    return `${protocol}//${hostname}`;
-  }
-
-  if (Platform.OS === 'android') return 'http://10.0.2.2:3001';
-  return 'http://localhost:3001';
-}
-
-function resolveApiPrefix(baseUrl: string): string {
-  if (Platform.OS !== 'web') return '';
-  const env = String(process.env.EXPO_PUBLIC_API_BASE_URL || '').trim();
-  if (env) {
-    try {
-      const u = new URL(env);
-      if (u.pathname.replace(/\/+$/, '') === '/api') return '/api';
-      return '';
-    } catch {
-      return env.replace(/\/+$/, '').endsWith('/api') ? '/api' : '';
-    }
-  }
-  try {
-    const u = new URL(baseUrl);
-    const host = u.hostname.toLowerCase();
-    if (host === 'localhost' || host === '127.0.0.1') return '';
-  } catch {
-  }
-  return '/api';
-}
-
-const API_BASE_URL = resolveApiBaseUrl();
-const API_PREFIX = resolveApiPrefix(API_BASE_URL);
-
-function buildApiUrl(path: string, params?: Record<string, string>): string {
-  const p = path.startsWith('/') ? path : `/${path}`;
-  const base = API_BASE_URL.endsWith('/') ? API_BASE_URL.slice(0, -1) : API_BASE_URL;
-  const url = new URL(`${API_PREFIX}${p}`, base);
-  if (params) {
-    Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
-  }
-  return url.toString();
-}
-let apiHealthOkUntilMs = 0;
-let apiHealthDownUntilMs = 0;
-let apiHealthFailCount = 0;
-let apiHealthInFlight: Promise<boolean> | null = null;
-
-function markApiUnhealthy(nowMs: number) {
-  apiHealthFailCount = Math.min(8, apiHealthFailCount + 1);
-  apiHealthOkUntilMs = 0;
-  apiHealthDownUntilMs = nowMs + Math.min(60_000, 1000 * 2 ** (apiHealthFailCount - 1));
-}
-
-async function isApiHealthy(timeoutMs: number): Promise<boolean> {
-  if (Platform.OS !== 'web') return true;
-
-  const nowMs = Date.now();
-  if (nowMs < apiHealthOkUntilMs) return true;
-  if (nowMs < apiHealthDownUntilMs) return false;
-  if (apiHealthInFlight) return apiHealthInFlight;
-
-  apiHealthInFlight = (async () => {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), Math.min(5000, timeoutMs));
-    try {
-      const url = buildApiUrl('/market/health');
-      const res = await fetch(url, { signal: controller.signal });
-      if (!res.ok) {
-        markApiUnhealthy(Date.now());
-        return false;
-      }
-      const json = (await res.json()) as { ok?: unknown };
-      if (json?.ok !== true) {
-        markApiUnhealthy(Date.now());
-        return false;
-      }
-      apiHealthFailCount = 0;
-      apiHealthDownUntilMs = 0;
-      apiHealthOkUntilMs = Date.now() + 20_000;
-      return true;
-    } catch {
-      markApiUnhealthy(Date.now());
-      return false;
-    } finally {
-      clearTimeout(timeout);
-      apiHealthInFlight = null;
-    }
-  })();
-
-  return apiHealthInFlight;
-}
-
 const DEFAULTS: Required<
   Pick<
     ScanOptions,
@@ -254,26 +154,23 @@ async function fetchBinanceTrAllowedSymbols(params: {
   quoteAsset: string;
   timeoutMs: number;
 }): Promise<Set<string>> {
-  if (Platform.OS === 'web') {
-    const ok = await isApiHealthy(params.timeoutMs);
-    if (!ok) throw new Error('API down');
-  }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), params.timeoutMs);
   try {
-    const url = buildApiUrl('/binance-tr/symbols', { quoteAsset: params.quoteAsset.toUpperCase() });
-    const res = await fetch(url, { signal: controller.signal });
+    const quoteAsset = params.quoteAsset.toUpperCase();
+    const res = await fetch('https://www.binance.tr/open/v1/common/symbols', { signal: controller.signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const json = (await res.json()) as { ok?: unknown; symbols?: unknown };
-    if (json?.ok !== true || !Array.isArray(json?.symbols)) {
-      throw new Error('Invalid response');
-    }
+    const json = (await res.json()) as { data?: unknown };
+    const list = (json as { data?: { list?: unknown } }).data?.list;
+    if (!Array.isArray(list)) throw new Error('Invalid response');
     const set = new Set<string>();
-    for (const item of json.symbols) {
-      if (typeof item !== 'string') continue;
-      const sym = item.trim().toUpperCase();
-      if (!sym) continue;
-      set.add(sym);
+    for (const item of list) {
+      const raw = (item as { symbol?: unknown })?.symbol;
+      if (typeof raw !== 'string') continue;
+      const s = raw.trim().toUpperCase();
+      if (!s) continue;
+      if (!s.endsWith(`_${quoteAsset}`)) continue;
+      set.add(s.replace('_', ''));
     }
     if (set.size === 0) throw new Error('Empty symbol list');
     return set;
@@ -295,15 +192,6 @@ async function fetchJson<T>(
   init: RequestInit | undefined,
   timeoutMs: number,
 ): Promise<T> {
-  if (Platform.OS === 'web') {
-    try {
-      const url = new URL(input);
-      if (url.hostname === 'data-api.binance.vision') {
-        throw new Error('Web üzerinde piyasa verisi proxy üzerinden alınmalıdır.');
-      }
-    } catch {
-    }
-  }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -584,30 +472,11 @@ export async function fetchTicker24h(
   const baseUrl = options?.baseUrl ?? DEFAULTS.baseUrl;
   const timeoutMs = options?.timeoutMs ?? DEFAULTS.timeoutMs;
   let raw: unknown;
-  if (Platform.OS === 'web') {
-    const clampedTimeoutMs = Math.min(5000, timeoutMs);
-    try {
-      const url = buildApiUrl('/market/ticker/24hr', { timeoutMs: String(clampedTimeoutMs) });
-      const body = await fetchJson<{ ok?: unknown; data?: unknown }>(url, undefined, clampedTimeoutMs);
-      if (body?.ok !== true || !Array.isArray(body?.data) || body.data.length === 0) {
-        throw new Error('Empty ticker list');
-      }
-      raw = body.data;
-    } catch {
-      try {
-        raw = await fetchTicker24hViaWebSocket(clampedTimeoutMs);
-      } catch {
-        markApiUnhealthy(Date.now());
-        throw new Error('Ticker listesi alınamadı.');
-      }
-    }
-  } else {
-    const url = buildUrl(baseUrl, '/api/v3/ticker/24hr');
-    try {
-      raw = await fetchJson<unknown[]>(url, undefined, timeoutMs);
-    } catch {
-      raw = await fetchTicker24hViaWebSocket(timeoutMs);
-    }
+  const url = buildUrl(baseUrl, '/api/v3/ticker/24hr');
+  try {
+    raw = await fetchJson<unknown[]>(url, undefined, timeoutMs);
+  } catch {
+    raw = await fetchTicker24hViaWebSocket(timeoutMs);
   }
 
   const list = Array.isArray(raw) ? raw : [];
@@ -670,31 +539,12 @@ export async function fetchKlines(
   const timeoutMs = options?.timeoutMs ?? DEFAULTS.timeoutMs;
 
   let raw: unknown;
-  if (Platform.OS === 'web') {
-    const ok = await isApiHealthy(timeoutMs);
-    if (!ok) return [];
-    try {
-      const url = buildApiUrl('/market/klines', {
-        symbol,
-        interval,
-        limit: String(limit),
-        timeoutMs: String(timeoutMs),
-      });
-      const body = await fetchJson<{ ok?: unknown; data?: unknown }>(url, undefined, timeoutMs);
-      if (body?.ok !== true || !Array.isArray(body?.data) || body.data.length === 0) return [];
-      raw = body.data;
-    } catch {
-      markApiUnhealthy(Date.now());
-      return [];
-    }
-  } else {
-    const url = buildUrl(baseUrl, '/api/v3/klines', {
-      symbol,
-      interval,
-      limit: String(limit),
-    });
-    raw = await fetchJson<unknown[]>(url, undefined, timeoutMs);
-  }
+  const url = buildUrl(baseUrl, '/api/v3/klines', {
+    symbol,
+    interval,
+    limit: String(limit),
+  });
+  raw = await fetchJson<unknown[]>(url, undefined, timeoutMs);
 
   const list = Array.isArray(raw) ? raw : [];
   const parsed: BinanceKline[] = [];
@@ -982,11 +832,6 @@ export async function runDeepFibonacciEngine(
     customStrategyCode: options?.customStrategyCode,
   };
 
-  if (Platform.OS === 'web') {
-    const ok = await isApiHealthy(merged.timeoutMs);
-    if (!ok) throw new Error('API down');
-  }
-
   const universe = filterTopPairsByQuoteVolume(tickers, merged);
   const rejected: ScanResult['rejected'] = [];
 
@@ -1195,64 +1040,6 @@ export async function scanTop3(options?: ScanOptions): Promise<ScanResult> {
 }
 
 export async function scanTop(options?: ScanOptions): Promise<ScanResult> {
-  const desired = Math.max(1, Math.trunc(options?.pickTopK ?? DEFAULTS.pickTopK));
-  if (Platform.OS === 'web') {
-    const timeoutMs = Math.min(5000, options?.timeoutMs ?? DEFAULTS.timeoutMs);
-    try {
-      const url = buildApiUrl('/scan/top', {
-        quoteAsset: String(options?.quoteAsset ?? DEFAULTS.quoteAsset),
-        pickTopK: String(desired),
-        timeoutMs: String(timeoutMs),
-        minRiskReward: String(options?.minRiskReward ?? DEFAULTS.minRiskReward),
-      });
-      const body = await fetchJson<{ ok?: unknown; data?: unknown }>(url, undefined, timeoutMs);
-      if (body?.ok === true && Array.isArray(body?.data)) {
-        const out: ScannedCandidate[] = [];
-        for (const item of body.data) {
-          if (!item || typeof item !== 'object') continue;
-          const obj = item as Partial<ScannedCandidate>;
-          if (typeof obj.symbol !== 'string' || obj.symbol.trim().length === 0) continue;
-          if (typeof obj.score !== 'number' || !Number.isFinite(obj.score)) continue;
-          if (!obj.scoreBreakdown) continue;
-          if (typeof obj.entry !== 'number' || !Number.isFinite(obj.entry)) continue;
-          if (typeof obj.target !== 'number' || !Number.isFinite(obj.target)) continue;
-          if (typeof obj.stop !== 'number' || !Number.isFinite(obj.stop)) continue;
-          if (typeof obj.riskReward !== 'number' || !Number.isFinite(obj.riskReward)) continue;
-          if (typeof obj.lastPrice !== 'number' || !Number.isFinite(obj.lastPrice)) continue;
-          if (typeof obj.lastChangePercent !== 'number' || !Number.isFinite(obj.lastChangePercent)) continue;
-          if (typeof obj.ema144 !== 'number' || !Number.isFinite(obj.ema144)) continue;
-          if (typeof obj.ema21 !== 'number' || !Number.isFinite(obj.ema21)) continue;
-          if (typeof obj.ema5 !== 'number' || !Number.isFinite(obj.ema5)) continue;
-          if (typeof obj.volMult !== 'number' || !Number.isFinite(obj.volMult)) continue;
-          out.push({
-            symbol: obj.symbol.trim().toUpperCase(),
-            score: obj.score,
-            scoreBreakdown: obj.scoreBreakdown,
-            entry: obj.entry,
-            target: obj.target,
-            stop: obj.stop,
-            riskReward: obj.riskReward,
-            lastPrice: obj.lastPrice,
-            lastChangePercent: obj.lastChangePercent,
-            ema5: obj.ema5,
-            ema21: obj.ema21,
-            ema144: obj.ema144,
-            volMult: obj.volMult,
-          });
-          if (out.length >= desired) break;
-        }
-        return {
-          asOfMs: Date.now(),
-          quoteAsset: options?.quoteAsset ?? DEFAULTS.quoteAsset,
-          topCandidates: out,
-          rejected: [],
-        };
-      }
-    } catch {
-    }
-    return { asOfMs: Date.now(), quoteAsset: options?.quoteAsset ?? DEFAULTS.quoteAsset, topCandidates: [], rejected: [] };
-  }
-
   const tickers = await fetchTicker24h(options);
   try {
     return await runDeepFibonacciEngine(tickers, options);
