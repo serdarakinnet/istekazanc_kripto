@@ -120,7 +120,7 @@ async function isApiHealthy(timeoutMs: number): Promise<boolean> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), Math.min(5000, timeoutMs));
     try {
-      const url = new URL('/health', API_BASE_URL);
+      const url = new URL('/market/health', API_BASE_URL);
       const res = await fetch(url.toString(), { signal: controller.signal });
       if (!res.ok) {
         markApiUnhealthy(Date.now());
@@ -979,6 +979,5 @@ export async function scanTop(options?: ScanOptions): Promise<ScanResult> {
     }
   } catch {
   }
-  // Yalnızca hiçbir şey bulamazsa veya hata alırsa
-  return { asOfMs: Date.now(), quoteAsset: options?.quoteAsset ?? DEFAULTS.quoteAsset, topCandidates: [], rejected: [] };
+  return buildLiteCandidatesFromTickers(tickers, { ...(options ?? {}), pickTopK: desired });
 }

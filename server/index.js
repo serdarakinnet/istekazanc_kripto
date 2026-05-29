@@ -190,9 +190,35 @@ function createApp() {
     }
   }));
 
+  app.get('/market/health', wrapAsync(async (req, res) => {
+    const timeoutMsRaw = typeof req.query?.timeoutMs === 'string' ? Number(req.query.timeoutMs) : NaN;
+    const timeoutMs = Number.isFinite(timeoutMsRaw) ? Math.max(500, Math.min(5000, timeoutMsRaw)) : 2500;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const r = await fetch('https://data-api.binance.vision/api/v3/ping', {
+        signal: controller.signal,
+        headers: {
+          accept: 'application/json',
+          'user-agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        },
+      });
+      if (!r.ok) {
+        return res.status(503).json({ ok: false, status: r.status });
+      }
+      return res.json({ ok: true });
+    } catch (e) {
+      return res.status(503).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+    } finally {
+      clearTimeout(timeout);
+    }
+  }));
+
   app.use(wrapAsync(async (req, res, next) => {
     if (
       req.path === '/health' ||
+      req.path === '/market/health' ||
       req.path === '/binance-tr/symbols' ||
       req.path === '/market/last-price' ||
       req.path === '/market/last-prices' ||
