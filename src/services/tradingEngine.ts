@@ -1110,6 +1110,63 @@ export async function scanTop3(options?: ScanOptions): Promise<ScanResult> {
 
 export async function scanTop(options?: ScanOptions): Promise<ScanResult> {
   const tickers = await fetchTicker24h(options);
+  const desired = Math.max(1, Math.trunc(options?.pickTopK ?? DEFAULTS.pickTopK));
+  if (Platform.OS === 'web') {
+    const timeoutMs = Math.min(5000, options?.timeoutMs ?? DEFAULTS.timeoutMs);
+    try {
+      const url = buildUrl(API_BASE_URL, '/scan/top', {
+        quoteAsset: String(options?.quoteAsset ?? DEFAULTS.quoteAsset),
+        pickTopK: String(desired),
+        timeoutMs: String(timeoutMs),
+        minRiskReward: String(options?.minRiskReward ?? DEFAULTS.minRiskReward),
+      });
+      const body = await fetchJson<{ ok?: unknown; data?: unknown }>(url, undefined, timeoutMs);
+      if (body?.ok === true && Array.isArray(body?.data)) {
+        const out: ScannedCandidate[] = [];
+        for (const item of body.data) {
+          if (!item || typeof item !== 'object') continue;
+          const obj = item as Partial<ScannedCandidate>;
+          if (typeof obj.symbol !== 'string' || obj.symbol.trim().length === 0) continue;
+          if (typeof obj.score !== 'number' || !Number.isFinite(obj.score)) continue;
+          if (!obj.scoreBreakdown) continue;
+          if (typeof obj.entry !== 'number' || !Number.isFinite(obj.entry)) continue;
+          if (typeof obj.target !== 'number' || !Number.isFinite(obj.target)) continue;
+          if (typeof obj.stop !== 'number' || !Number.isFinite(obj.stop)) continue;
+          if (typeof obj.riskReward !== 'number' || !Number.isFinite(obj.riskReward)) continue;
+          if (typeof obj.lastPrice !== 'number' || !Number.isFinite(obj.lastPrice)) continue;
+          if (typeof obj.lastChangePercent !== 'number' || !Number.isFinite(obj.lastChangePercent)) continue;
+          if (typeof obj.ema144 !== 'number' || !Number.isFinite(obj.ema144)) continue;
+          if (typeof obj.ema21 !== 'number' || !Number.isFinite(obj.ema21)) continue;
+          if (typeof obj.ema5 !== 'number' || !Number.isFinite(obj.ema5)) continue;
+          if (typeof obj.volMult !== 'number' || !Number.isFinite(obj.volMult)) continue;
+          out.push({
+            symbol: obj.symbol.trim().toUpperCase(),
+            score: obj.score,
+            scoreBreakdown: obj.scoreBreakdown,
+            entry: obj.entry,
+            target: obj.target,
+            stop: obj.stop,
+            riskReward: obj.riskReward,
+            lastPrice: obj.lastPrice,
+            lastChangePercent: obj.lastChangePercent,
+            ema5: obj.ema5,
+            ema21: obj.ema21,
+            ema144: obj.ema144,
+            volMult: obj.volMult,
+          });
+          if (out.length >= desired) break;
+        }
+        return {
+          asOfMs: Date.now(),
+          quoteAsset: options?.quoteAsset ?? DEFAULTS.quoteAsset,
+          topCandidates: out,
+          rejected: [],
+        };
+      }
+    } catch {
+    }
+  }
+
   try {
     return await runDeepFibonacciEngine(tickers, options);
   } catch {
