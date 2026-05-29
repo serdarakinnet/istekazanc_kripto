@@ -15,6 +15,8 @@ export interface CryptoCardProps {
   onClose?: () => void;
 }
 
+const EMPTY_HISTORY: number[] = [];
+
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -67,7 +69,7 @@ function ScoreTier({ score }: { score: number }) {
 
 function CryptoCardImpl({ symbol, entryPrice, targetPrice, stopPrice, score, onClose }: CryptoCardProps) {
   const upperSymbol = useMemo(() => symbol.toUpperCase(), [symbol]);
-  const history = usePriceHistoryStore((s) => s.history[upperSymbol] ?? []);
+  const history = usePriceHistoryStore((s) => s.history[upperSymbol] ?? EMPTY_HISTORY);
   const currentPrice = usePriceHistoryStore((s) => s.currentPrices[upperSymbol] ?? null);
 
   const pnlPct = useMemo(() => {
