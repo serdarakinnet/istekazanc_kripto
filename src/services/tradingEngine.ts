@@ -302,6 +302,19 @@ export function emaSeries(values: number[], length: number): number[] {
   return output;
 }
 
+function lastFinite(values: number[]): number | null {
+  for (let i = values.length - 1; i >= 0; i -= 1) {
+    const v = values[i];
+    if (Number.isFinite(v)) return v;
+  }
+  return null;
+}
+
+function emaLast(values: number[], length: number): number | null {
+  const series = emaSeries(values, length);
+  return lastFinite(series);
+}
+
 function maxInWindow(values: number[], lookback: number, excludeLast: boolean): number | null {
   const end = excludeLast ? values.length - 1 : values.length;
   const start = Math.max(0, end - lookback);
@@ -327,6 +340,49 @@ function pctChange(now: number, prev: number): number {
 
 function clampMin(value: number, min: number): number {
   return value < min ? min : value;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function calcRsiWilder(closes: number[], period: number): number | null {
+  if (closes.length < period + 1) return null;
+  let gains = 0;
+  let losses = 0;
+  for (let i = 1; i <= period; i += 1) {
+    const d = closes[i] - closes[i - 1];
+    if (d > 0) gains += d;
+    else losses -= d;
+  }
+  let avgGain = gains / period;
+  let avgLoss = losses / period;
+  for (let i = period + 1; i < closes.length; i += 1) {
+    const d = closes[i] - closes[i - 1];
+    const gain = d > 0 ? d : 0;
+    const loss = d < 0 ? -d : 0;
+    avgGain = (avgGain * (period - 1) + gain) / period;
+    avgLoss = (avgLoss * (period - 1) + loss) / period;
+  }
+  if (avgLoss === 0) return 100;
+  const rs = avgGain / avgLoss;
+  return 100 - 100 / (1 + rs);
+}
+
+function calcAtrSma(highs: number[], lows: number[], closes: number[], period: number): number | null {
+  if (highs.length < period + 1 || lows.length < period + 1 || closes.length < period + 1) return null;
+  const trs: number[] = [];
+  for (let i = 1; i < highs.length; i += 1) {
+    const hl = highs[i] - lows[i];
+    const hc = Math.abs(highs[i] - closes[i - 1]);
+    const lc = Math.abs(lows[i] - closes[i - 1]);
+    trs.push(Math.max(hl, hc, lc));
+  }
+  if (trs.length < period) return null;
+  const window = trs.slice(-period);
+  let sum = 0;
+  for (const v of window) sum += v;
+  return sum / period;
 }
 
 async function fetchTicker24hViaWebSocket(timeoutMs: number): Promise<BinanceTicker24h[]> {
@@ -806,13 +862,18 @@ export async function runDeepFibonacciEngine(
     if (!ok) throw new Error('API down');
   }
 
-  // Binance TR CORS hataları ve geo-block nedeniyle global TRY çiftlerini doğrudan alıyoruz.
-  const universe = filterTopPairsByQuoteVolume(tickers, merged);
+  const universe = filterTopPairsByQuoteVolume(tickers, {
+    ...merged,
+    topNByQuoteVolume: Math.min(120, merged.topNByQuoteVolume),
+  });
   const rejected: ScanResult['rejected'] = [];
+
+  const desired = Math.max(1, Math.trunc(merged.pickTopK));
+  const bandsPct = [0.3, 0.6, 1.0, 1.5, 2.0, 3.0, 5.0, 8.0, 12.0, 20.0, 30.0];
 
   const candidates = await mapWithConcurrency(
     universe,
-    merged.concurrency,
+    Math.max(1, Math.min(4, merged.concurrency)),
     async (ticker) => {
       try {
         const klines = await fetchKlines(ticker.symbol, merged);
@@ -826,46 +887,92 @@ export async function runDeepFibonacciEngine(
         const lows = klines.map((k) => k.low);
         const volumes = klines.map((k) => k.volume);
 
-        const scored = scoreCandidate({
-          closes,
-          highs,
-          lows,
-          volumes,
-          minRiskReward: merged.minRiskReward,
-          customStrategyCode: merged.customStrategyCode,
-        });
-
-        if (!scored.ok) {
-          rejected.push({
-            symbol: ticker.symbol,
-            reason: scored.rejectReason ?? 'network',
-          });
+        const price = closes[closes.length - 1];
+        if (!Number.isFinite(price) || price <= 0) {
+          rejected.push({ symbol: ticker.symbol, reason: 'not-enough-data' });
           return null;
         }
 
-        const lastPrice = ensureFiniteNumber(ticker.lastPrice, 'lastPrice');
-        const lastChangePercent = ensureFiniteNumber(
-          ticker.priceChangePercent,
-          'priceChangePercent',
-        );
+        const ema144 = emaLast(closes, 144);
+        if (ema144 === null || !Number.isFinite(ema144) || ema144 <= 0) {
+          rejected.push({ symbol: ticker.symbol, reason: 'not-enough-data' });
+          return null;
+        }
 
-        const candidate: ScannedCandidate = {
+        const ema21 = emaLast(closes, 21) ?? 0;
+        const ema5 = emaLast(closes, 5) ?? 0;
+        const rsi14 = calcRsiWilder(closes, 14);
+        const atr14 = calcAtrSma(highs, lows, closes, 14);
+
+        if (rsi14 === null || atr14 === null || !Number.isFinite(atr14) || atr14 <= 0) {
+          rejected.push({ symbol: ticker.symbol, reason: 'not-enough-data' });
+          return null;
+        }
+
+        const distPct = Math.abs(price - ema144) / ema144 * 100;
+
+        const lastPrice = ensureFiniteNumber(ticker.lastPrice, 'lastPrice');
+        const lastChangePercent = ensureFiniteNumber(ticker.priceChangePercent, 'priceChangePercent');
+        const prev3 = closes.length >= 4 ? closes[closes.length - 4] : Number.NaN;
+        const prev12 = closes.length >= 13 ? closes[closes.length - 13] : Number.NaN;
+        const mom3 = Number.isFinite(prev3) && prev3 > 0 ? pctChange(price, prev3) : 0;
+        const mom12 = Number.isFinite(prev12) && prev12 > 0 ? pctChange(price, prev12) : 0;
+
+        const vol20 = volumes.slice(-20);
+        let vol20sum = 0;
+        for (const v of vol20) vol20sum += v;
+        const vol20avg = vol20.length ? vol20sum / vol20.length : 0;
+        const curVol = volumes[volumes.length - 1] ?? 0;
+        const volMult = vol20avg > 0 ? curVol / vol20avg : 0;
+
+        const slMult = 1.6 + clamp((55 - rsi14) / 50, -0.2, 0.4);
+        const rr = clamp(2.3 + mom12 / 12 + (55 - rsi14) / 200, 2.0, 3.0);
+
+        let stop = price - atr14 * slMult;
+        stop = Math.max(stop, price * 0.92);
+        stop = Math.min(stop, price * 0.98);
+        const risk = price - stop;
+        if (!Number.isFinite(risk) || risk <= 0) {
+          rejected.push({ symbol: ticker.symbol, reason: 'invalid-risk' });
+          return null;
+        }
+        const target = price + risk * rr;
+
+        const scoreRaw =
+          95
+          - distPct * 20
+          + clamp(mom12, -5, 10) * 2
+          + clamp(mom3, -3, 6) * 1.5
+          + clamp(lastChangePercent, -10, 10) * 0.5
+          + clamp(volMult, 0, 3) * 2
+          + (15 - Math.min(30, Math.abs(rsi14 - 55))) * 0.6;
+        const score = Math.round(clamp(scoreRaw, 0, 99));
+
+        return {
           symbol: ticker.symbol,
-          score: scored.score,
-          scoreBreakdown: scored.breakdown,
-          entry: scored.entry,
-          target: scored.target,
-          stop: scored.stop,
-          riskReward: scored.rr,
+          score,
+          scoreBreakdown: {
+            freshCross: false,
+            trendOk: ema5 > 0 && ema21 > 0 && ema144 > 0 ? ema5 >= ema21 && ema21 >= ema144 : false,
+            priceAboveEma21: ema21 > 0 ? price >= ema21 : false,
+            breakout: false,
+            pullbackReclaim: true,
+            volMultOk: volMult >= 1.0,
+            ema21SlopeUp: false,
+            flatPenalty: false,
+            pumpPenalty: false,
+          },
+          entry: Number(price.toFixed(8)),
+          target: Number(target.toFixed(8)),
+          stop: Number(stop.toFixed(8)),
+          riskReward: Number(rr.toFixed(2)),
           lastPrice,
           lastChangePercent,
-          ema5: scored.ema5,
-          ema21: scored.ema21,
-          ema144: scored.ema144,
-          volMult: scored.volMult,
-        };
-
-        return candidate;
+          ema5: Number.isFinite(ema5) ? Number(ema5.toFixed(8)) : 0,
+          ema21: Number.isFinite(ema21) ? Number(ema21.toFixed(8)) : 0,
+          ema144: Number(ema144.toFixed(8)),
+          volMult: Number.isFinite(volMult) ? Number(volMult.toFixed(2)) : 0,
+        } satisfies ScannedCandidate;
       } catch {
         rejected.push({ symbol: ticker.symbol, reason: 'network' });
         return null;
@@ -873,15 +980,28 @@ export async function runDeepFibonacciEngine(
     },
   );
 
-  const picked = candidates.filter((x): x is ScannedCandidate => Boolean(x));
-  
-  // AI Filtresi ve Önceliklendirme
-  const aiFiltered = aiFilterCandidates(picked);
-  
-  const topCandidates = aiFiltered.slice(
-    0,
-    Math.max(1, Math.trunc(merged.pickTopK)),
-  );
+  const pickedAll = candidates.filter((x): x is ScannedCandidate => Boolean(x));
+
+  const pickedByBand: ScannedCandidate[] = [];
+  for (let bi = 0; bi < bandsPct.length; bi += 1) {
+    pickedByBand.length = 0;
+    for (const c of pickedAll) {
+      const distPct = c.ema144 > 0 ? Math.abs(c.entry - c.ema144) / c.ema144 * 100 : Infinity;
+      if (distPct <= bandsPct[bi]) pickedByBand.push(c);
+    }
+    if (pickedByBand.length >= desired) break;
+  }
+
+  const ranked = aiFilterCandidates(pickedByBand);
+  ranked.sort((a, b) => {
+    const da = a.ema144 > 0 ? Math.abs(a.entry - a.ema144) / a.ema144 : Infinity;
+    const db = b.ema144 > 0 ? Math.abs(b.entry - b.ema144) / b.ema144 : Infinity;
+    if (da !== db) return da - db;
+    if (b.score !== a.score) return b.score - a.score;
+    return b.lastChangePercent - a.lastChangePercent;
+  });
+
+  const topCandidates = ranked.slice(0, desired);
 
   return {
     asOfMs: Date.now(),
@@ -976,13 +1096,9 @@ export async function scanTop3(options?: ScanOptions): Promise<ScanResult> {
 
 export async function scanTop(options?: ScanOptions): Promise<ScanResult> {
   const tickers = await fetchTicker24h(options);
-  const desired = Math.max(1, Math.trunc(options?.pickTopK ?? DEFAULTS.pickTopK));
   try {
-    const deep = await runDeepFibonacciEngine(tickers, options);
-    if (deep.topCandidates.length > 0) {
-      return deep; // 1 tane bile bulsa deep'i döndür, lite sahte sinyallere düşme
-    }
+    return await runDeepFibonacciEngine(tickers, options);
   } catch {
   }
-  return buildLiteCandidatesFromTickers(tickers, { ...(options ?? {}), pickTopK: desired });
+  return { asOfMs: Date.now(), quoteAsset: options?.quoteAsset ?? DEFAULTS.quoteAsset, topCandidates: [], rejected: [] };
 }

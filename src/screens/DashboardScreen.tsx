@@ -349,6 +349,7 @@ export function DashboardScreen() {
         renderItem={({ item }) => {
           if (item.kind === 'empty') {
             if (isScanning || scanQuery.isLoading) return null;
+            if (candidates.length > 0) return null;
             return (
               <View style={{ marginHorizontal: 12, marginVertical: 6 }}>
                 <View
@@ -368,7 +369,7 @@ export function DashboardScreen() {
                     Uygun Sinyal Bulunamadı
                   </Text>
                   <Text style={{ fontSize: 12, color: '#6b7280', textAlign: 'center', lineHeight: 18 }}>
-                    Piyasa şu an strateji kriterlerini (Trend, Hacim, RSI) karşılamıyor olabilir.{`\n`}Yenile butonuna basarak tekrar taratabilirsiniz.
+                    EMA144 bölgesinde uygun aday bulunamadı.{`\n`}Yenile butonuna basarak tekrar taratabilirsiniz.
                   </Text>
                 </View>
               </View>
