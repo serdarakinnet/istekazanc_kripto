@@ -89,14 +89,46 @@ function resolveApiBaseUrl(): string {
     const hostname = g.location?.hostname || 'localhost';
     const host = hostname.toLowerCase();
     if (host === 'localhost' || host === '127.0.0.1') return `${protocol}//${hostname}:3001`;
-    return `${protocol}//${hostname}/api`;
+    return `${protocol}//${hostname}`;
   }
 
   if (Platform.OS === 'android') return 'http://10.0.2.2:3001';
   return 'http://localhost:3001';
 }
 
+function resolveApiPrefix(baseUrl: string): string {
+  if (Platform.OS !== 'web') return '';
+  const env = String(process.env.EXPO_PUBLIC_API_BASE_URL || '').trim();
+  if (env) {
+    try {
+      const u = new URL(env);
+      if (u.pathname.replace(/\/+$/, '') === '/api') return '/api';
+      return '';
+    } catch {
+      return env.replace(/\/+$/, '').endsWith('/api') ? '/api' : '';
+    }
+  }
+  try {
+    const u = new URL(baseUrl);
+    const host = u.hostname.toLowerCase();
+    if (host === 'localhost' || host === '127.0.0.1') return '';
+  } catch {
+  }
+  return '/api';
+}
+
 const API_BASE_URL = resolveApiBaseUrl();
+const API_PREFIX = resolveApiPrefix(API_BASE_URL);
+
+function buildApiUrl(path: string, params?: Record<string, string>): string {
+  const p = path.startsWith('/') ? path : `/${path}`;
+  const base = API_BASE_URL.endsWith('/') ? API_BASE_URL.slice(0, -1) : API_BASE_URL;
+  const url = new URL(`${API_PREFIX}${p}`, base);
+  if (params) {
+    Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+  }
+  return url.toString();
+}
 let apiHealthOkUntilMs = 0;
 let apiHealthDownUntilMs = 0;
 let apiHealthFailCount = 0;
@@ -120,8 +152,8 @@ async function isApiHealthy(timeoutMs: number): Promise<boolean> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), Math.min(5000, timeoutMs));
     try {
-      const url = new URL('/market/health', API_BASE_URL);
-      const res = await fetch(url.toString(), { signal: controller.signal });
+      const url = buildApiUrl('/market/health');
+      const res = await fetch(url, { signal: controller.signal });
       if (!res.ok) {
         markApiUnhealthy(Date.now());
         return false;
@@ -197,9 +229,8 @@ async function fetchBinanceTrAllowedSymbols(params: {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), params.timeoutMs);
   try {
-    const url = new URL('/binance-tr/symbols', API_BASE_URL);
-    url.searchParams.set('quoteAsset', params.quoteAsset.toUpperCase());
-    const res = await fetch(url.toString(), { signal: controller.signal });
+    const url = buildApiUrl('/binance-tr/symbols', { quoteAsset: params.quoteAsset.toUpperCase() });
+    const res = await fetch(url, { signal: controller.signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json = (await res.json()) as { ok?: unknown; symbols?: unknown };
     if (json?.ok !== true || !Array.isArray(json?.symbols)) {
@@ -461,9 +492,7 @@ export async function fetchTicker24h(
   if (Platform.OS === 'web') {
     const clampedTimeoutMs = Math.min(5000, timeoutMs);
     try {
-      const url = buildUrl(API_BASE_URL, '/market/ticker/24hr', {
-        timeoutMs: String(clampedTimeoutMs),
-      });
+      const url = buildApiUrl('/market/ticker/24hr', { timeoutMs: String(clampedTimeoutMs) });
       const body = await fetchJson<{ ok?: unknown; data?: unknown }>(url, undefined, clampedTimeoutMs);
       if (body?.ok !== true || !Array.isArray(body?.data) || body.data.length === 0) {
         throw new Error('Empty ticker list');
@@ -550,7 +579,7 @@ export async function fetchKlines(
     const ok = await isApiHealthy(timeoutMs);
     if (!ok) return [];
     try {
-      const url = buildUrl(API_BASE_URL, '/market/klines', {
+      const url = buildApiUrl('/market/klines', {
         symbol,
         interval,
         limit: String(limit),
@@ -1113,7 +1142,7 @@ export async function scanTop(options?: ScanOptions): Promise<ScanResult> {
   if (Platform.OS === 'web') {
     const timeoutMs = Math.min(5000, options?.timeoutMs ?? DEFAULTS.timeoutMs);
     try {
-      const url = buildUrl(API_BASE_URL, '/scan/top', {
+      const url = buildApiUrl('/scan/top', {
         quoteAsset: String(options?.quoteAsset ?? DEFAULTS.quoteAsset),
         pickTopK: String(desired),
         timeoutMs: String(timeoutMs),
