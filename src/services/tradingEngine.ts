@@ -416,6 +416,69 @@ function calcAtrSma(highs: number[], lows: number[], closes: number[], period: n
   return sum / period;
 }
 
+function calcEmaV65(data: number[], p: number): number | null {
+  if (!Array.isArray(data) || data.length < p) return null;
+  const k = 2 / (p + 1);
+  let e = data.slice(0, p).reduce((a, b) => a + b, 0) / p;
+  for (let i = p; i < data.length; i += 1) e = data[i] * k + e * (1 - k);
+  return Number(e.toFixed(6));
+}
+
+function calcRsiV65(data: number[], p = 14): number | null {
+  if (!Array.isArray(data) || data.length < p + 1) return null;
+  let g = 0;
+  let l = 0;
+  for (let i = 1; i <= p; i += 1) {
+    const d = data[i] - data[i - 1];
+    if (d > 0) g += d;
+    else l -= d;
+  }
+  let ag = g / p;
+  let al = l / p;
+  for (let i = p + 1; i < data.length; i += 1) {
+    const d = data[i] - data[i - 1];
+    ag = (ag * (p - 1) + Math.max(d, 0)) / p;
+    al = (al * (p - 1) + Math.max(-d, 0)) / p;
+  }
+  if (al === 0) return 100;
+  return Number((100 - 100 / (1 + ag / al)).toFixed(2));
+}
+
+function calcAtrV65(highs: number[], lows: number[], closes: number[], p = 14): number | null {
+  if (!Array.isArray(highs) || highs.length < p + 1) return null;
+  if (!Array.isArray(lows) || lows.length < p + 1) return null;
+  if (!Array.isArray(closes) || closes.length < p + 1) return null;
+  const trs: number[] = [];
+  for (let i = 1; i < highs.length; i += 1) {
+    trs.push(
+      Math.max(
+        highs[i] - lows[i],
+        Math.abs(highs[i] - closes[i - 1]),
+        Math.abs(lows[i] - closes[i - 1]),
+      ),
+    );
+  }
+  if (trs.length < p) return null;
+  const window = trs.slice(-p);
+  const sum = window.reduce((a, b) => a + b, 0);
+  return Number((sum / p).toFixed(6));
+}
+
+function calcMacdV65(data: number[]): { macd: number; signal: number | null; hist: number | null } | null {
+  if (!Array.isArray(data) || data.length < 35) return null;
+  const series: number[] = [];
+  for (let i = 26; i <= data.length; i += 1) {
+    const e12 = calcEmaV65(data.slice(0, i), 12);
+    const e26 = calcEmaV65(data.slice(0, i), 26);
+    if (e12 != null && e26 != null) series.push(e12 - e26);
+  }
+  if (!series.length) return null;
+  const macd = series[series.length - 1];
+  const signal = calcEmaV65(series, 9);
+  const hist = signal == null ? null : Number((macd - signal).toFixed(6));
+  return { macd: Number(macd.toFixed(6)), signal, hist };
+}
+
 async function fetchTicker24hViaWebSocket(timeoutMs: number): Promise<BinanceTicker24h[]> {
   const url = 'wss://data-stream.binance.vision/ws/!ticker@arr';
   return await new Promise<BinanceTicker24h[]>((resolve, reject) => {
@@ -891,160 +954,120 @@ export async function runDeepFibonacciEngine(
     if (!ok) throw new Error('API down');
   }
 
-  const universe = filterTopPairsByQuoteVolume(tickers, {
-    ...merged,
-    topNByQuoteVolume: Math.min(80, merged.topNByQuoteVolume),
-  });
+  const universe = filterTopPairsByQuoteVolume(tickers, merged);
   const rejected: ScanResult['rejected'] = [];
 
   const desired = Math.max(1, Math.trunc(merged.pickTopK));
-  const bandsPct = [0.3, 0.6, 1.0, 1.5, 2.0, 3.0, 5.0, 8.0, 12.0, 20.0, 30.0];
-  const concurrency = Math.max(1, Math.min(3, merged.concurrency));
 
-  function ema144DistPct(c: ScannedCandidate): number {
-    if (!Number.isFinite(c.entry) || !Number.isFinite(c.ema144) || c.ema144 <= 0) return Infinity;
-    return Math.abs(c.entry - c.ema144) / c.ema144 * 100;
-  }
+  const candidates = await mapWithConcurrency(
+    universe,
+    Math.max(1, merged.concurrency),
+    async (ticker) => {
+      try {
+        const klines = await fetchKlines(ticker.symbol, merged);
+        if (klines.length === 0) {
+          rejected.push({ symbol: ticker.symbol, reason: 'no-klines' });
+          return null;
+        }
 
-  async function buildCandidate(ticker: BinanceTicker24h): Promise<ScannedCandidate | null> {
-    try {
-      const klines = await fetchKlines(ticker.symbol, merged);
-      if (klines.length === 0) {
-        rejected.push({ symbol: ticker.symbol, reason: 'no-klines' });
+        const closes = klines.map((k) => k.close);
+        const highs = klines.map((k) => k.high);
+        const lows = klines.map((k) => k.low);
+        const volumes = klines.map((k) => k.volume);
+        if (closes.length < 60) {
+          rejected.push({ symbol: ticker.symbol, reason: 'not-enough-data' });
+          return null;
+        }
+
+        const price = closes[closes.length - 1];
+        if (!Number.isFinite(price) || price <= 0) {
+          rejected.push({ symbol: ticker.symbol, reason: 'not-enough-data' });
+          return null;
+        }
+
+        const e5 = calcEmaV65(closes, 5);
+        const e21 = calcEmaV65(closes, 21);
+        const e55 = calcEmaV65(closes, 55);
+        const e144 = calcEmaV65(closes, 144);
+        const rsi = calcRsiV65(closes, 14);
+        const atr = calcAtrV65(highs, lows, closes, 14);
+        const macd = calcMacdV65(closes);
+
+        if ([e5, e21, e55, rsi, atr].some((v) => v == null) || !macd) {
+          rejected.push({ symbol: ticker.symbol, reason: 'not-enough-data' });
+          return null;
+        }
+
+        const vol20 = volumes.slice(-20);
+        const vol20avg = vol20.length ? vol20.reduce((a, b) => a + b, 0) / vol20.length : 0;
+        const curVol = volumes[volumes.length - 1];
+        const volMult = vol20avg > 0 ? Number((curVol / vol20avg).toFixed(2)) : 0;
+
+        const trendLong = e5 > e21 && e21 > e55;
+        const macdLong = macd.hist != null && macd.hist > 0;
+        const volLong = volMult >= 1.1;
+
+        const gates = [trendLong, macdLong, volLong].filter(Boolean).length;
+        let longScore = gates * 20 + (rsi > 50 ? 10 : 0) + (volMult > 1.5 ? 10 : 0);
+        longScore = Math.max(0, Math.min(100, Math.round(longScore)));
+
+        let stop = Math.min(price - atr * 1.6, (minInWindow(lows, 20, false) ?? price) * 0.99);
+        stop = Math.max(stop, price * 0.92);
+        stop = Math.min(stop, price * 0.98);
+        const longStop = Number(stop.toFixed(6));
+
+        const risk = price - longStop;
+        const longTarget = Number((price + risk * 2.5).toFixed(6));
+        const longRR = risk > 0 ? Number(((longTarget - price) / risk).toFixed(2)) : 0;
+
+        if (longRR < 1.5) {
+          rejected.push({ symbol: ticker.symbol, reason: 'rr-too-low' });
+          return null;
+        }
+
+        if (longScore < 30) {
+          rejected.push({ symbol: ticker.symbol, reason: 'score-low' });
+          return null;
+        }
+
+        const lastPrice = ensureFiniteNumber(ticker.lastPrice, 'lastPrice');
+        const lastChangePercent = ensureFiniteNumber(ticker.priceChangePercent, 'priceChangePercent');
+
+        return {
+          symbol: ticker.symbol,
+          score: longScore,
+          scoreBreakdown: {
+            freshCross: false,
+            trendOk: trendLong,
+            priceAboveEma21: price >= e21,
+            breakout: false,
+            pullbackReclaim: trendLong,
+            volMultOk: volLong,
+            ema21SlopeUp: false,
+            flatPenalty: false,
+            pumpPenalty: false,
+          },
+          entry: Number(price.toFixed(6)),
+          target: Number(longTarget.toFixed(6)),
+          stop: Number(longStop.toFixed(6)),
+          riskReward: Number(longRR.toFixed(2)),
+          lastPrice,
+          lastChangePercent,
+          ema5: Number(e5.toFixed(6)),
+          ema21: Number(e21.toFixed(6)),
+          ema144: Number((e144 ?? 0).toFixed(6)),
+          volMult,
+        } satisfies ScannedCandidate;
+      } catch {
+        rejected.push({ symbol: ticker.symbol, reason: 'network' });
         return null;
       }
+    },
+  );
 
-      const closes = klines.map((k) => k.close);
-      const highs = klines.map((k) => k.high);
-      const lows = klines.map((k) => k.low);
-      const volumes = klines.map((k) => k.volume);
-
-      const price = closes[closes.length - 1];
-      if (!Number.isFinite(price) || price <= 0) {
-        rejected.push({ symbol: ticker.symbol, reason: 'not-enough-data' });
-        return null;
-      }
-
-      const ema144 = emaLast(closes, 144);
-      if (ema144 === null || !Number.isFinite(ema144) || ema144 <= 0) {
-        rejected.push({ symbol: ticker.symbol, reason: 'not-enough-data' });
-        return null;
-      }
-
-      const ema21 = emaLast(closes, 21) ?? 0;
-      const ema5 = emaLast(closes, 5) ?? 0;
-      const rsi14 = calcRsiWilder(closes, 14);
-      const atr14 = calcAtrSma(highs, lows, closes, 14);
-
-      if (rsi14 === null || atr14 === null || !Number.isFinite(atr14) || atr14 <= 0) {
-        rejected.push({ symbol: ticker.symbol, reason: 'not-enough-data' });
-        return null;
-      }
-
-      const distPct = Math.abs(price - ema144) / ema144 * 100;
-
-      const lastPrice = ensureFiniteNumber(ticker.lastPrice, 'lastPrice');
-      const lastChangePercent = ensureFiniteNumber(ticker.priceChangePercent, 'priceChangePercent');
-      const prev3 = closes.length >= 4 ? closes[closes.length - 4] : Number.NaN;
-      const prev12 = closes.length >= 13 ? closes[closes.length - 13] : Number.NaN;
-      const mom3 = Number.isFinite(prev3) && prev3 > 0 ? pctChange(price, prev3) : 0;
-      const mom12 = Number.isFinite(prev12) && prev12 > 0 ? pctChange(price, prev12) : 0;
-
-      const vol20 = volumes.slice(-20);
-      let vol20sum = 0;
-      for (const v of vol20) vol20sum += v;
-      const vol20avg = vol20.length ? vol20sum / vol20.length : 0;
-      const curVol = volumes[volumes.length - 1] ?? 0;
-      const volMult = vol20avg > 0 ? curVol / vol20avg : 0;
-
-      const slMult = 1.6 + clamp((55 - rsi14) / 50, -0.2, 0.4);
-      const rr = clamp(2.3 + mom12 / 12 + (55 - rsi14) / 200, 2.0, 3.0);
-
-      let stop = price - atr14 * slMult;
-      stop = Math.max(stop, price * 0.92);
-      stop = Math.min(stop, price * 0.98);
-      const risk = price - stop;
-      if (!Number.isFinite(risk) || risk <= 0) {
-        rejected.push({ symbol: ticker.symbol, reason: 'invalid-risk' });
-        return null;
-      }
-      const target = price + risk * rr;
-
-      const scoreRaw =
-        95
-        - distPct * 20
-        + clamp(mom12, -5, 10) * 2
-        + clamp(mom3, -3, 6) * 1.5
-        + clamp(lastChangePercent, -10, 10) * 0.5
-        + clamp(volMult, 0, 3) * 2
-        + (15 - Math.min(30, Math.abs(rsi14 - 55))) * 0.6;
-      const score = Math.round(clamp(scoreRaw, 0, 99));
-
-      return {
-        symbol: ticker.symbol,
-        score,
-        scoreBreakdown: {
-          freshCross: false,
-          trendOk: ema5 > 0 && ema21 > 0 && ema144 > 0 ? ema5 >= ema21 && ema21 >= ema144 : false,
-          priceAboveEma21: ema21 > 0 ? price >= ema21 : false,
-          breakout: false,
-          pullbackReclaim: true,
-          volMultOk: volMult >= 1.0,
-          ema21SlopeUp: false,
-          flatPenalty: false,
-          pumpPenalty: false,
-        },
-        entry: Number(price.toFixed(8)),
-        target: Number(target.toFixed(8)),
-        stop: Number(stop.toFixed(8)),
-        riskReward: Number(rr.toFixed(2)),
-        lastPrice,
-        lastChangePercent,
-        ema5: Number.isFinite(ema5) ? Number(ema5.toFixed(8)) : 0,
-        ema21: Number.isFinite(ema21) ? Number(ema21.toFixed(8)) : 0,
-        ema144: Number(ema144.toFixed(8)),
-        volMult: Number.isFinite(volMult) ? Number(volMult.toFixed(2)) : 0,
-      } satisfies ScannedCandidate;
-    } catch {
-      rejected.push({ symbol: ticker.symbol, reason: 'network' });
-      return null;
-    }
-  }
-
-  const built: ScannedCandidate[] = [];
-  let bandIndex = 0;
-
-  function pickByBandIndex(idx: number): ScannedCandidate[] {
-    const band = bandsPct[Math.max(0, Math.min(bandsPct.length - 1, idx))];
-    return built.filter((c) => ema144DistPct(c) <= band);
-  }
-
-  for (let i = 0; i < universe.length; i += concurrency) {
-    const slice = universe.slice(i, i + concurrency);
-    const results = await Promise.all(slice.map((t) => buildCandidate(t)));
-    for (const c of results) {
-      if (c) built.push(c);
-    }
-
-    while (bandIndex < bandsPct.length - 1 && pickByBandIndex(bandIndex).length < desired) {
-      bandIndex += 1;
-    }
-
-    if (pickByBandIndex(bandIndex).length >= desired) break;
-  }
-
-  const pickedByBand = pickByBandIndex(bandIndex);
-
-  const ranked = aiFilterCandidates(pickedByBand);
-  ranked.sort((a, b) => {
-    const da = a.ema144 > 0 ? Math.abs(a.entry - a.ema144) / a.ema144 : Infinity;
-    const db = b.ema144 > 0 ? Math.abs(b.entry - b.ema144) / b.ema144 : Infinity;
-    if (da !== db) return da - db;
-    if (b.score !== a.score) return b.score - a.score;
-    return b.lastChangePercent - a.lastChangePercent;
-  });
-
-  const topCandidates = ranked.slice(0, desired);
+  const picked = candidates.filter((c): c is ScannedCandidate => c !== null);
+  const sorted = [...picked].sort((a, b) => b.score - a.score);
+  const topCandidates = sorted.slice(0, desired);
 
   return {
     asOfMs: Date.now(),

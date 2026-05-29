@@ -486,70 +486,75 @@ function createApp() {
       return Math.max(min, Math.min(max, x));
     }
 
-    function emaLast(values, period) {
-      if (!Array.isArray(values) || values.length < period) return null;
-      const k = 2 / (period + 1);
-      let ema = 0;
-      for (let i = 0; i < period; i++) ema += values[i];
-      ema /= period;
-      for (let i = period; i < values.length; i++) {
-        ema = values[i] * k + ema * (1 - k);
-      }
-      return ema;
+    function toNum(v, d = Number.NaN) {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : d;
     }
 
-    function calcRsiWilder(values, period) {
-      if (!Array.isArray(values) || values.length < period + 1) return null;
-      let gains = 0;
-      let losses = 0;
-      for (let i = 1; i <= period; i++) {
-        const d = values[i] - values[i - 1];
-        if (d > 0) gains += d;
-        else losses -= d;
-      }
-      let avgGain = gains / period;
-      let avgLoss = losses / period;
-      for (let i = period + 1; i < values.length; i++) {
-        const d = values[i] - values[i - 1];
-        const gain = d > 0 ? d : 0;
-        const loss = d < 0 ? -d : 0;
-        avgGain = (avgGain * (period - 1) + gain) / period;
-        avgLoss = (avgLoss * (period - 1) + loss) / period;
-      }
-      if (avgLoss === 0) return 100;
-      const rs = avgGain / avgLoss;
-      return 100 - 100 / (1 + rs);
+    function calcEMA(data, p) {
+      if (!Array.isArray(data) || data.length < p) return null;
+      const k = 2 / (p + 1);
+      let e = data.slice(0, p).reduce((a, b) => a + b, 0) / p;
+      for (let i = p; i < data.length; i++) e = data[i] * k + e * (1 - k);
+      return +e.toFixed(6);
     }
 
-    function calcAtrSma(highs, lows, closes, period) {
-      if (!Array.isArray(highs) || !Array.isArray(lows) || !Array.isArray(closes)) return null;
-      if (highs.length < period + 1 || lows.length < period + 1 || closes.length < period + 1) return null;
+    function calcRSI(data, p = 14) {
+      if (!Array.isArray(data) || data.length < p + 1) return null;
+      let g = 0, l = 0;
+      for (let i = 1; i <= p; i++) {
+        const d = data[i] - data[i - 1];
+        if (d > 0) g += d;
+        else l -= d;
+      }
+      let ag = g / p, al = l / p;
+      for (let i = p + 1; i < data.length; i++) {
+        const d = data[i] - data[i - 1];
+        ag = (ag * (p - 1) + Math.max(d, 0)) / p;
+        al = (al * (p - 1) + Math.max(-d, 0)) / p;
+      }
+      if (al === 0) return 100;
+      return +(100 - 100 / (1 + ag / al)).toFixed(2);
+    }
+
+    function calcATR(h, l, c, p = 14) {
+      if (!Array.isArray(h) || h.length < p + 1) return null;
       const trs = [];
-      for (let i = 1; i < highs.length; i++) {
-        const hl = highs[i] - lows[i];
-        const hc = Math.abs(highs[i] - closes[i - 1]);
-        const lc = Math.abs(lows[i] - closes[i - 1]);
-        trs.push(Math.max(hl, hc, lc));
+      for (let i = 1; i < h.length; i++) {
+        trs.push(Math.max(h[i] - l[i], Math.abs(h[i] - c[i - 1]), Math.abs(l[i] - c[i - 1])));
       }
-      if (trs.length < period) return null;
-      const window = trs.slice(-period);
-      let sum = 0;
-      for (const v of window) sum += v;
-      return sum / period;
+      if (trs.length < p) return null;
+      return +(trs.slice(-p).reduce((a, b) => a + b, 0) / p).toFixed(6);
     }
 
-    function ema144DistPct(entry, ema144) {
-      if (!Number.isFinite(entry) || !Number.isFinite(ema144) || ema144 <= 0) return Infinity;
-      return Math.abs(entry - ema144) / ema144 * 100;
+    function calcMACD(data) {
+      if (!Array.isArray(data) || data.length < 35) return null;
+      const series = [];
+      for (let i = 26; i <= data.length; i++) {
+        const e12 = calcEMA(data.slice(0, i), 12);
+        const e26 = calcEMA(data.slice(0, i), 26);
+        if (e12 != null && e26 != null) series.push(e12 - e26);
+      }
+      if (!series.length) return null;
+      const macd = series[series.length - 1];
+      const signal = calcEMA(series, 9);
+      const hist = signal == null ? null : +(macd - signal).toFixed(6);
+      return { macd: +macd.toFixed(6), signal, hist };
+    }
+
+    function minInWindow(values, lookback) {
+      const start = Math.max(0, values.length - lookback);
+      if (values.length <= start) return null;
+      let min = Infinity;
+      for (let i = start; i < values.length; i++) min = Math.min(min, values[i]);
+      return Number.isFinite(min) ? min : null;
     }
 
     const quoteAsset = String(req.query?.quoteAsset || 'TRY').trim().toUpperCase() || 'TRY';
     const desired = clamp(req.query?.pickTopK ?? req.query?.desired ?? 3, 1, 3);
     const timeoutMs = clamp(req.query?.timeoutMs ?? 4000, 1000, 5000);
-    const maxTickers = clamp(req.query?.maxTickers ?? 60, 20, 120);
-    const concurrency = clamp(req.query?.concurrency ?? 3, 1, 3);
-    const minRiskReward = clamp(req.query?.minRiskReward ?? 2.0, 1.2, 4.0);
-    const bandsPct = [0.3, 0.6, 1.0, 1.5, 2.0, 3.0, 5.0, 8.0, 12.0, 20.0, 30.0];
+    const maxTickers = clamp(req.query?.maxTickers ?? 60, 20, 200);
+    const concurrency = clamp(req.query?.concurrency ?? 3, 1, 5);
     const excludeBases = new Set(['USDT', 'USDC', 'FDUSD', 'TUSD', 'BUSD', 'DAI', 'USDP', 'PAXG', 'XAUT']);
 
     let tickers;
@@ -572,7 +577,6 @@ function createApp() {
       .slice(0, maxTickers);
 
     const built = [];
-    let bandIndex = 0;
 
     async function buildCandidate(t) {
       const symbol = String(t.symbol || '').trim().toUpperCase();
@@ -591,10 +595,10 @@ function createApp() {
       const volumes = [];
       for (const k of klines) {
         if (!Array.isArray(k) || k.length < 6) continue;
-        const c = Number(k[4]);
-        const h = Number(k[2]);
-        const l = Number(k[3]);
-        const v = Number(k[5]);
+        const c = toNum(k[4]);
+        const h = toNum(k[2]);
+        const l = toNum(k[3]);
+        const v = toNum(k[5]);
         if (!Number.isFinite(c) || !Number.isFinite(h) || !Number.isFinite(l) || !Number.isFinite(v)) continue;
         if (c <= 0 || h <= 0 || l <= 0 || v < 0) continue;
         closes.push(c);
@@ -602,116 +606,87 @@ function createApp() {
         lows.push(l);
         volumes.push(v);
       }
-      if (closes.length < 160) return null;
+      if (closes.length < 60) return null;
 
       const price = closes[closes.length - 1];
-      const ema144 = emaLast(closes, 144);
-      const ema21 = emaLast(closes, 21);
-      const ema5 = emaLast(closes, 5);
-      const rsi14 = calcRsiWilder(closes, 14);
-      const atr14 = calcAtrSma(highs, lows, closes, 14);
-      if (
-        !Number.isFinite(price) ||
-        !Number.isFinite(ema144) ||
-        !Number.isFinite(ema21) ||
-        !Number.isFinite(ema5) ||
-        !Number.isFinite(rsi14) ||
-        !Number.isFinite(atr14) ||
-        atr14 <= 0 ||
-        ema144 <= 0
-      ) {
-        return null;
-      }
-
-      const distPct = ema144DistPct(price, ema144);
-      const prev3 = closes.length >= 4 ? closes[closes.length - 4] : Number.NaN;
-      const prev12 = closes.length >= 13 ? closes[closes.length - 13] : Number.NaN;
-      const mom3 = Number.isFinite(prev3) && prev3 > 0 ? ((price - prev3) / prev3) * 100 : 0;
-      const mom12 = Number.isFinite(prev12) && prev12 > 0 ? ((price - prev12) / prev12) * 100 : 0;
+      if (!Number.isFinite(price) || price <= 0) return null;
 
       const vol20 = volumes.slice(-20);
       let vol20sum = 0;
       for (const v of vol20) vol20sum += v;
       const vol20avg = vol20.length ? vol20sum / vol20.length : 0;
       const curVol = volumes[volumes.length - 1] ?? 0;
-      const volMult = vol20avg > 0 ? curVol / vol20avg : 0;
+      const volMult = vol20avg > 0 ? +(curVol / vol20avg).toFixed(2) : 0;
 
-      const slMult = 1.6 + Math.max(-0.2, Math.min(0.4, (55 - rsi14) / 50));
-      const rr = Math.max(2.0, Math.min(3.0, Math.max(minRiskReward, 2.3 + mom12 / 12 + (55 - rsi14) / 200)));
-      let stop = price - atr14 * slMult;
+      const e5 = calcEMA(closes, 5);
+      const e21 = calcEMA(closes, 21);
+      const e55 = calcEMA(closes, 55);
+      const e144 = calcEMA(closes, 144);
+      const rsi = calcRSI(closes, 14);
+      const atr = calcATR(highs, lows, closes, 14);
+      const macd = calcMACD(closes);
+
+      if ([e5, e21, e55, rsi, atr].some((v) => v == null) || !macd) return null;
+
+      const trendLong = e5 > e21 && e21 > e55;
+      const macdLong = macd.hist != null && macd.hist > 0;
+      const volLong = volMult >= 1.1;
+      const gates = [trendLong, macdLong, volLong].filter(Boolean).length;
+      let longScore = gates * 20 + (rsi > 50 ? 10 : 0) + (volMult > 1.5 ? 10 : 0);
+      longScore = Math.max(0, Math.min(100, Math.round(longScore)));
+
+      let stop = Math.min(price - atr * 1.6, (minInWindow(lows, 20) ?? price) * 0.99);
       stop = Math.max(stop, price * 0.92);
       stop = Math.min(stop, price * 0.98);
-      const risk = price - stop;
-      if (!Number.isFinite(risk) || risk <= 0) return null;
-      const target = price + risk * rr;
+      const longStop = +stop.toFixed(6);
+      const risk = price - longStop;
+      const longTarget = +(price + risk * 2.5).toFixed(6);
+      const longRR = risk > 0 ? +((longTarget - price) / risk).toFixed(2) : 0;
 
-      const lastChangePercent = Number(t.priceChangePercent || 0);
-      const scoreRaw =
-        95 -
-        distPct * 20 +
-        Math.max(-5, Math.min(10, mom12)) * 2 +
-        Math.max(-3, Math.min(6, mom3)) * 1.5 +
-        Math.max(-10, Math.min(10, lastChangePercent)) * 0.5 +
-        Math.max(0, Math.min(3, volMult)) * 2 +
-        (15 - Math.min(30, Math.abs(rsi14 - 55))) * 0.6;
-      const score = Math.round(Math.max(0, Math.min(99, scoreRaw)));
+      if (!(longScore >= 30) || !(longRR >= 1.5)) return null;
 
+      const lastPrice = toNum(t.lastPrice, price);
+      const lastChangePercent = toNum(t.priceChangePercent, 0);
       return {
         symbol,
-        score,
+        score: longScore,
         scoreBreakdown: {
           freshCross: false,
-          trendOk: ema5 >= ema21 && ema21 >= ema144,
-          priceAboveEma21: price >= ema21,
+          trendOk: trendLong,
+          priceAboveEma21: e21 > 0 ? price >= e21 : false,
           breakout: false,
-          pullbackReclaim: true,
-          volMultOk: volMult >= 1.0,
+          pullbackReclaim: trendLong,
+          volMultOk: volLong,
           ema21SlopeUp: false,
           flatPenalty: false,
           pumpPenalty: false,
         },
-        entry: Number(price.toFixed(8)),
-        target: Number(target.toFixed(8)),
-        stop: Number(stop.toFixed(8)),
-        riskReward: Number(rr.toFixed(2)),
-        lastPrice: Number(price.toFixed(8)),
-        lastChangePercent: Number.isFinite(lastChangePercent) ? lastChangePercent : 0,
-        ema5: Number(ema5.toFixed(8)),
-        ema21: Number(ema21.toFixed(8)),
-        ema144: Number(ema144.toFixed(8)),
-        volMult: Number.isFinite(volMult) ? Number(volMult.toFixed(2)) : 0,
+        entry: Number(price.toFixed(6)),
+        target: Number(longTarget.toFixed(6)),
+        stop: Number(longStop.toFixed(6)),
+        riskReward: Number(longRR.toFixed(2)),
+        lastPrice: Number(lastPrice.toFixed(6)),
+        lastChangePercent: Number(lastChangePercent.toFixed(2)),
+        ema5: Number(e5.toFixed(6)),
+        ema21: Number(e21.toFixed(6)),
+        ema144: Number((e144 ?? 0).toFixed(6)),
+        volMult: Number(volMult.toFixed(2)),
       };
-    }
-
-    function pickByBand(idx) {
-      const band = bandsPct[Math.max(0, Math.min(bandsPct.length - 1, idx))];
-      return built.filter((c) => ema144DistPct(c.entry, c.ema144) <= band);
     }
 
     for (let i = 0; i < tryTickers.length; i += concurrency) {
       const batch = tryTickers.slice(i, i + concurrency);
       const results = await Promise.all(batch.map((t) => buildCandidate(t)));
       for (const c of results) if (c) built.push(c);
-
-      while (bandIndex < bandsPct.length - 1 && pickByBand(bandIndex).length < desired) {
-        bandIndex += 1;
-      }
-      if (pickByBand(bandIndex).length >= desired) break;
+      if (built.length >= desired) break;
     }
 
-    const picked = pickByBand(bandIndex);
-    picked.sort((a, b) => {
-      const da = ema144DistPct(a.entry, a.ema144);
-      const db = ema144DistPct(b.entry, b.ema144);
-      if (da !== db) return da - db;
-      if (b.score !== a.score) return b.score - a.score;
-      return b.lastChangePercent - a.lastChangePercent;
-    });
+    built.sort((a, b) => b.score - a.score);
 
     return res.json({
       ok: true,
-      data: picked.slice(0, desired),
-      meta: { quoteAsset, desired, maxTickers, concurrency, bandPct: bandsPct[bandIndex] },
+      data: built.slice(0, desired),
+      meta: { quoteAsset, desired, maxTickers, concurrency },
     });
   });
 
