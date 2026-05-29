@@ -1109,7 +1109,6 @@ export async function scanTop3(options?: ScanOptions): Promise<ScanResult> {
 }
 
 export async function scanTop(options?: ScanOptions): Promise<ScanResult> {
-  const tickers = await fetchTicker24h(options);
   const desired = Math.max(1, Math.trunc(options?.pickTopK ?? DEFAULTS.pickTopK));
   if (Platform.OS === 'web') {
     const timeoutMs = Math.min(5000, options?.timeoutMs ?? DEFAULTS.timeoutMs);
@@ -1165,8 +1164,10 @@ export async function scanTop(options?: ScanOptions): Promise<ScanResult> {
       }
     } catch {
     }
+    return { asOfMs: Date.now(), quoteAsset: options?.quoteAsset ?? DEFAULTS.quoteAsset, topCandidates: [], rejected: [] };
   }
 
+  const tickers = await fetchTicker24h(options);
   try {
     return await runDeepFibonacciEngine(tickers, options);
   } catch {
