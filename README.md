@@ -24,10 +24,9 @@
 
 ## ✨ Özellikler
 
-- 📈 **Otomatik Al-Sat** — Binance API üzerinden otomatik emir oluşturma
+- 📈 **Otomatik Al-Sat** — Binance API üzerinden otomatik emir oluşturma (YAKINDA...)
 - 📊 **Son 24 Saat Analizi** — Gerçek zamanlı performans takibi
 - 💰 **Kar/Zarar Çizelgesi** — Detaylı işlem geçmişi ve kazanç raporu
-- 🔄 **İşlem Raporlarını Sıfırlama** — Raporları temizleyerek yeni dönem başlatma
 - 🗄️ **Supabase Entegrasyonu** — Bulut tabanlı veritabanı ile güvenli veri saklama
 - ☁️ **Vercel Dağıtımı** — Hızlı ve kesintisiz sunucu tarafı çalışma
 - 🔐 **API Güvenliği** — Binance API anahtarları şifreli ortam değişkenleri ile korunur
