@@ -14,6 +14,7 @@ import {
   runBotCycle,
   unregisterBotBackgroundTask,
 } from './src/services/botController';
+import { clearLegacySensitiveStorage } from './src/services/secureStore';
 import { initUserDb } from './src/services/userDb';
 import { useAppStore } from './src/store/useAppStore';
 
@@ -142,7 +143,6 @@ function BotSupervisor() {
 }
 
 export default function App() {
-  const hydrateSecure = useAppStore((s) => s.hydrateSecure);
   const hydrateAuthFromSupabase = useAppStore((s) => s.hydrateAuthFromSupabase);
   const resetReportsDatasetIfNeeded = useAppStore((s) => s.resetReportsDatasetIfNeeded);
   const [globalError, setGlobalError] = React.useState<{ message: string; stack?: string } | null>(
@@ -151,9 +151,9 @@ export default function App() {
 
   useEffect(() => {
     initUserDb();
-    hydrateSecure();
+    void clearLegacySensitiveStorage().catch(() => {});
     void hydrateAuthFromSupabase();
-  }, [hydrateAuthFromSupabase, hydrateSecure]);
+  }, [hydrateAuthFromSupabase]);
 
   useEffect(() => {
     void resetReportsDatasetIfNeeded();

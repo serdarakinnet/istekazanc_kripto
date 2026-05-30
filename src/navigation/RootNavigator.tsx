@@ -1,17 +1,12 @@
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { NavigationContainer, DefaultTheme } from '@react-navigation/native';
-import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { FileText, LayoutGrid, User } from 'lucide-react-native';
+import { FileText, LayoutGrid } from 'lucide-react-native';
 import * as React from 'react';
 import { Text, View } from 'react-native';
 
-import { ApiKeySetupScreen } from '../screens/ApiKeySetupScreen';
 import { DashboardScreen } from '../screens/DashboardScreen';
-import { LoginScreen } from '../screens/LoginScreen';
-import { ProfileScreen } from '../screens/ProfileScreen';
-import { RegisterScreen } from '../screens/RegisterScreen';
 import { ReportsScreen } from '../screens/ReportsScreen';
-import { selectAppReady, selectAuthPhase, useAppStore } from '../store/useAppStore';
+import { selectAppReady, useAppStore } from '../store/useAppStore';
 
 export type AuthStackParamList = {
   Login: undefined;
@@ -22,10 +17,8 @@ export type AuthStackParamList = {
 export type AppTabParamList = {
   Dashboard: undefined;
   Reports: undefined;
-  Profile: undefined;
 };
 
-const AuthStack = createNativeStackNavigator<AuthStackParamList>();
 const Tabs = createBottomTabNavigator<AppTabParamList>();
 
 const navTheme = {
@@ -40,30 +33,10 @@ const navTheme = {
   },
 };
 
-function AuthStackNavigator({
-  initialRouteName,
-}: {
-  initialRouteName: keyof AuthStackParamList;
-}) {
-  return (
-    <AuthStack.Navigator
-      initialRouteName={initialRouteName}
-      screenOptions={{
-        headerShown: false,
-        animation: 'fade',
-        contentStyle: { backgroundColor: '#05070a' },
-      }}
-    >
-      <AuthStack.Screen name="Login" component={LoginScreen} />
-      <AuthStack.Screen name="Register" component={RegisterScreen} />
-      <AuthStack.Screen name="ApiKeys" component={ApiKeySetupScreen} />
-    </AuthStack.Navigator>
-  );
-}
-
 function AppTabsNavigator() {
   return (
     <Tabs.Navigator
+      initialRouteName="Dashboard"
       screenOptions={{
         headerShown: false,
         tabBarStyle: {
@@ -104,24 +77,13 @@ function AppTabsNavigator() {
           ),
         }}
       />
-      <Tabs.Screen
-        name="Profile"
-        component={ProfileScreen}
-        options={{
-          title: 'Profil',
-          tabBarIcon: ({ color, size }) => <User color={color} size={size} />,
-        }}
-      />
     </Tabs.Navigator>
   );
 }
 
 export function RootNavigator() {
   const appReady = useAppStore((s) =>
-    selectAppReady({ hasLocalHydrated: s.hasLocalHydrated, hasSecureHydrated: s.hasSecureHydrated }),
-  );
-  const authPhase = useAppStore((s) =>
-    selectAuthPhase({ isSignedIn: s.isSignedIn, apiCredentials: s.apiCredentials }),
+    selectAppReady({ hasLocalHydrated: s.hasLocalHydrated }),
   );
 
   if (!appReady) {
@@ -132,16 +94,9 @@ export function RootNavigator() {
     );
   }
 
-  const initialAuthRoute: keyof AuthStackParamList =
-    'Login';
-
   return (
     <NavigationContainer theme={navTheme}>
-      {authPhase === 'ready' ? (
-        <AppTabsNavigator />
-      ) : (
-        <AuthStackNavigator initialRouteName={initialAuthRoute} />
-      )}
+      <AppTabsNavigator />
     </NavigationContainer>
   );
 }

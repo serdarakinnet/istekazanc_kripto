@@ -63,7 +63,7 @@ function mapSupabaseAuthErrorMessage(message: string): string {
   }
 
   if (/email not confirmed/i.test(msg)) {
-    return 'E-mail doğrulanmamış. Gelen kutunu kontrol et, doğrulama linkine tıkla ve sonra tekrar giriş yap.';
+    return 'E-posta doğrulanmamış. Gelen kutunu (Spam/Promosyon dahil) kontrol et, doğrulama linkine tıkla ve sonra tekrar dene.';
   }
 
   if (/user already registered/i.test(msg) || /already registered/i.test(msg)) {
@@ -136,15 +136,16 @@ export async function createUser(params: CreateUserParams): Promise<UserRecord> 
   });
   if (signUpError) throw new Error(mapSupabaseAuthErrorMessage(signUpError.message));
 
-  let authUser = signUpData.user;
-  if (!signUpData.session) {
-    const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-    if (signInError) throw new Error(mapSupabaseAuthErrorMessage(signInError.message));
-    authUser = signInData.user;
-  }
-
+  const authUser = signUpData.user;
   if (!authUser?.id || !authUser.email) {
     throw new Error('Kullanıcı oluşturulamadı.');
+  }
+
+  if (!signUpData.session) {
+    await ensureAppUserRow({ id: authUser.id, email: authUser.email, displayName: params.displayName ?? null });
+    throw new Error(
+      'E-posta doğrulanmamış. Gelen kutunu (Spam/Promosyon dahil) kontrol et, doğrulama linkine tıkla ve sonra tekrar dene. E-posta gelmediyse doğrulama mailini yeniden gönder.',
+    );
   }
 
   await ensureAppUserRow({ id: authUser.id, email: authUser.email, displayName: params.displayName ?? null });
@@ -158,6 +159,13 @@ export async function createUser(params: CreateUserParams): Promise<UserRecord> 
     passwordSalt: '',
     createdAtMs: Date.now(),
   };
+}
+
+export async function resendSignupConfirmationEmail(emailInput: string): Promise<void> {
+  const supabase = requireSupabase();
+  const email = normalizeEmailInput(emailInput);
+  const { error } = await supabase.auth.resend({ type: 'signup', email });
+  if (error) throw new Error(mapSupabaseAuthErrorMessage(error.message));
 }
 
 export async function getUserByEmail(emailInput: string): Promise<UserRecord | null> {

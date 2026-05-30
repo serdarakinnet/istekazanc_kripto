@@ -64,6 +64,14 @@ function errorResponse(res, status, message) {
   return res.status(status).json({ error: message });
 }
 
+function requireInternalToken(req, res) {
+  const expected = String(process.env.INTERNAL_API_TOKEN || '').trim();
+  if (!expected) return errorResponse(res, 503, 'INTERNAL_API_TOKEN eksik.');
+  const provided = String(req.headers['x-internal-token'] || '').trim();
+  if (!provided || provided !== expected) return errorResponse(res, 401, 'Yetkisiz.');
+  return null;
+}
+
 function dbUnavailable(res) {
   return errorResponse(res, 503, 'Veritabanına bağlanılamadı.');
 }
@@ -1486,6 +1494,8 @@ function createApp() {
   }));
 
   app.get('/users/:userId/api-credentials', wrapAsync(async (req, res) => {
+    const denied = requireInternalToken(req, res);
+    if (denied) return;
     const userId = String(req.params.userId || '').trim();
     if (!userId) return res.json(null);
 
@@ -1500,16 +1510,12 @@ function createApp() {
     );
     const row = result.rows[0];
     if (!row) return res.json(null);
-    try {
-      const apiKey = decryptText(row.apiKeyEnc);
-      const apiSecret = decryptText(row.apiSecretEnc);
-      return res.json({ userId, apiKey, apiSecret, updatedAtMs: Number(row.updatedAtMs) });
-    } catch (e) {
-      return errorResponse(res, 500, e instanceof Error ? e.message : String(e));
-    }
+    return res.json({ userId, hasCredentials: true, updatedAtMs: Number(row.updatedAtMs) });
   }));
 
   app.put('/users/:userId/api-credentials', wrapAsync(async (req, res) => {
+    const denied = requireInternalToken(req, res);
+    if (denied) return;
     const userId = String(req.params.userId || '').trim();
     if (!userId) return errorResponse(res, 400, 'Kullanıcı bulunamadı.');
 

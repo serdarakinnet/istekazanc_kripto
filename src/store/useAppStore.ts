@@ -2,14 +2,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 
-import type { ApiCredentials } from '../services/secureStore';
 import type { ScannedCandidate } from '../services/tradingEngine';
 import type { UserRecord } from '../services/userDb';
-import {
-  clearApiCredentials,
-  getApiCredentials,
-  setApiCredentials,
-} from '../services/secureStore';
 import {
   appendUserReports,
   createUser,
@@ -50,10 +44,8 @@ export type ActivePosition = ScannedCandidate & {
 
 type AppState = {
   hasLocalHydrated: boolean;
-  hasSecureHydrated: boolean;
   isSignedIn: boolean;
   user: Pick<UserRecord, 'id' | 'email' | 'displayName'> | null;
-  apiCredentials: ApiCredentials | null;
   watchlist: ScannedCandidate[];
   lastScanMs: number | null;
   positions: ActivePosition[];
@@ -65,14 +57,11 @@ type AppState = {
   recentlyClosedSymbols: Record<string, number>;
   settings: AppSettings;
   setLocalHydrated: (hydrated: boolean) => void;
-  hydrateSecure: () => Promise<void>;
   hydrateAuthFromSupabase: () => Promise<void>;
   resetReportsDatasetIfNeeded: () => Promise<void>;
   signInWithEmail: (params: { email: string; password: string }) => Promise<void>;
   signUpWithEmail: (params: { email: string; password: string; displayName?: string }) => Promise<void>;
   signOut: () => void;
-  saveApiCredentials: (credentials: ApiCredentials) => Promise<void>;
-  forgetApiCredentials: () => Promise<void>;
   setWatchlist: (items: ScannedCandidate[], asOfMs: number) => void;
   setPositions: (items: ActivePosition[], asOfMs: number) => void;
   closePositionManually: (params: { symbol: string }) => void;
@@ -278,10 +267,8 @@ export const useAppStore = create<AppState>()(
   persist(
     (set, get) => ({
       hasLocalHydrated: false,
-      hasSecureHydrated: false,
       isSignedIn: false,
       user: null,
-      apiCredentials: null,
       watchlist: [],
       lastScanMs: null,
       positions: [],
@@ -308,20 +295,6 @@ export const useAppStore = create<AppState>()(
         } catch {
         }
         set({ reports: [], reportsNeedsRemoteReset: false, reportsResetAtMs: now });
-      },
-
-      hydrateSecure: async () => {
-        try {
-          const credentials = await getApiCredentials();
-          if (credentials) {
-            set({ apiCredentials: credentials, hasSecureHydrated: true });
-            return;
-          }
-
-          set({ apiCredentials: null, hasSecureHydrated: true });
-        } catch {
-          set({ apiCredentials: null, hasSecureHydrated: true });
-        }
       },
 
       hydrateAuthFromSupabase: async () => {
@@ -591,29 +564,6 @@ export const useAppStore = create<AppState>()(
         });
       },
 
-      saveApiCredentials: async (credentials) => {
-        const apiKey = credentials.apiKey.trim();
-        const apiSecret = credentials.apiSecret.trim();
-
-        if (!apiKey || !apiSecret) {
-          throw new Error('API Key ve Secret Key zorunludur.');
-        }
-
-        await setApiCredentials({ apiKey, apiSecret });
-        set({ apiCredentials: { apiKey, apiSecret } });
-      },
-
-      forgetApiCredentials: async () => {
-        await clearApiCredentials();
-        set({ apiCredentials: null });
-
-        const signedIn = get().isSignedIn;
-        if (signedIn) {
-          void signOutUser().catch(() => {});
-          set({ isSignedIn: false, user: null });
-        }
-      },
-
       setWatchlist: (items, asOfMs) => {
         set({ watchlist: items, lastScanMs: asOfMs });
       },
@@ -841,11 +791,6 @@ export const useAppStore = create<AppState>()(
   ),
 );
 
-export function selectAppReady(state: Pick<AppState, 'hasLocalHydrated' | 'hasSecureHydrated'>): boolean {
-  return state.hasLocalHydrated && state.hasSecureHydrated;
-}
-
-export function selectAuthPhase(state: Pick<AppState, 'isSignedIn' | 'apiCredentials'>): 'signedOut' | 'needsApiCredentials' | 'ready' {
-  if (!state.isSignedIn) return 'signedOut';
-  return 'ready';
+export function selectAppReady(state: Pick<AppState, 'hasLocalHydrated'>): boolean {
+  return state.hasLocalHydrated;
 }
