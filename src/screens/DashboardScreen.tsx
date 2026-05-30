@@ -84,18 +84,16 @@ export function DashboardScreen() {
     }
   }, [autoTradeEnabled, positions.length, lastScanMs, isScanning]);
 
-  const showingPositions = autoTradeEnabled && positions.length > 0;
+  const showingPositions = positions.length > 0;
   const candidates = React.useMemo(() => {
     const base =
-      autoTradeEnabled && positions.length > 0
+      positions.length > 0
         ? positions
         : watchlist.length > 0
-          ? watchlist
-          : scanQuery.data?.topCandidates ?? [];
+            ? watchlist
+            : scanQuery.data?.topCandidates ?? [];
 
-    const pool = autoTradeEnabled
-      ? [...base, ...watchlist, ...(scanQuery.data?.topCandidates ?? [])]
-      : base;
+    const pool = [...base, ...watchlist, ...(scanQuery.data?.topCandidates ?? [])];
 
     const out: typeof base = [];
     const seen = new Set<string>();
@@ -108,7 +106,7 @@ export function DashboardScreen() {
       if (out.length >= 3) break;
     }
     return out;
-  }, [autoTradeEnabled, positions, scanQuery.data?.topCandidates, watchlist]);
+  }, [positions, scanQuery.data?.topCandidates, watchlist]);
 
   const todayReports = React.useMemo(() => {
     const now = Date.now();

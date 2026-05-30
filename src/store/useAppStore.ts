@@ -599,13 +599,32 @@ export const useAppStore = create<AppState>()(
         const state = get();
         const sym = symbol.trim().toUpperCase();
         if (!sym) return;
-        if (!state.isSignedIn) return;
 
         const pos = state.positions.find((p) => p.symbol.trim().toUpperCase() === sym);
         if (!pos) return;
 
         const nowMs = Date.now();
         state.addRecentlyClosedSymbols([sym], nowMs);
+
+        const entry = Number(pos.entry);
+        const exitCandidate = Number(pos.lastPrice);
+        const exit = Number.isFinite(exitCandidate) ? exitCandidate : Number.isFinite(entry) ? entry : 0;
+        const pnlPct = Number.isFinite(entry) && entry !== 0 && Number.isFinite(exit) ? ((exit - entry) / entry) * 100 : 0;
+        const outcome = exit >= Number(pos.target) ? 'TP' : exit <= Number(pos.stop) ? 'SL' : pnlPct >= 0 ? 'TP' : 'SL';
+
+        state.appendReports([
+          {
+            id: `${sym}-${pos.openedAtMs}-${outcome}`,
+            symbol: sym,
+            openedAtMs: pos.openedAtMs,
+            closedAtMs: nowMs,
+            entry,
+            exit,
+            outcome,
+            pnlPct,
+            riskRewardAtEntry: Number(pos.riskReward) || 0,
+          },
+        ]);
 
         const remaining = state.positions.filter((p) => p.symbol.trim().toUpperCase() !== sym);
         const keepScanMs = state.lastScanMs ?? nowMs;
@@ -618,7 +637,7 @@ export const useAppStore = create<AppState>()(
         const filtered = resetAtMs > 0 ? items.filter((r) => Number(r.closedAtMs) >= resetAtMs) : items;
         if (filtered.length === 0) return;
         const current = get().reports;
-        const next = mergeReportsById(current, filtered);
+        const next = mergeReportsById(current, filtered).slice(0, 500);
         set({ reports: next });
 
         const userId = get().user?.id;
@@ -673,7 +692,7 @@ export const useAppStore = create<AppState>()(
             ...fromServer,
             ...(pending?.reports ?? []),
             ...state.reports,
-          ]);
+          ]).slice(0, 500);
           set({ reports: merged });
         } catch {
           try {
@@ -681,7 +700,7 @@ export const useAppStore = create<AppState>()(
             const merged = normalizeAndDedupeReports([
               ...(pending?.reports ?? []),
               ...get().reports,
-            ]);
+            ]).slice(0, 500);
             set({ reports: merged });
           } catch {
             // Ignore if pending read also fails
@@ -779,6 +798,7 @@ export const useAppStore = create<AppState>()(
         watchlist: state.watchlist,
         lastScanMs: state.lastScanMs,
         positions: state.positions,
+        reports: state.reports.slice(0, 500),
         settings: state.settings,
         recentlyClosedSymbols: state.recentlyClosedSymbols,
         reportsResetAtMs: state.reportsResetAtMs,

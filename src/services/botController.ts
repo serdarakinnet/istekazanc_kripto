@@ -47,7 +47,6 @@ function uniqueActivePositions(items: ActivePosition[]): ActivePosition[] {
 function refreshPoolIfNeeded(nowMs: number): void {
   const state = useAppStore.getState();
   if (!state.settings.autoTradeEnabled) return;
-  if (!state.isSignedIn) return;
 
   const updatedAt = state.scanPoolUpdatedAtMs ?? 0;
   const stale = nowMs - updatedAt > 45_000;
@@ -282,7 +281,6 @@ export async function runInitialScanAndSetPositions(): Promise<void> {
 export async function applyLivePricesAndRotate(prices: Record<string, number>): Promise<void> {
   const state = useAppStore.getState();
   if (!state.settings.autoTradeEnabled) return;
-  if (!state.isSignedIn) return;
 
   const nowMs = Date.now();
   refreshPoolIfNeeded(nowMs);
@@ -326,7 +324,6 @@ export async function applyLivePricesAndRotate(prices: Record<string, number>): 
 export async function runBotCycle(): Promise<void> {
   const state = useAppStore.getState();
   if (!state.settings.autoTradeEnabled) return;
-  if (!state.isSignedIn) return;
 
   const nowMs = Date.now();
   refreshPoolIfNeeded(nowMs);
